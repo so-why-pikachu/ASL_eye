@@ -8,10 +8,10 @@ import os
 DATA_ROOT = "/home/jm802/sign_language/data"
 
 # 原始视频目录（按 video_id 命名的 .mp4 文件）
-VIDEO_DIR = os.path.join(DATA_ROOT, "wlasl-complete", "videos")
+VIDEO_DIR = os.path.join(DATA_ROOT, "ASL_Citizen", "videos")
 
-# WLASL-300 分割 JSON（包含 word → video_id / split 映射）
-SPLIT_JSON_PATH = os.path.join(DATA_ROOT, "wlasl-complete", "nslt_300.json")
+# 更新后的 CSV 路径（先测试 train.csv）
+CSV_PATH = os.path.join(DATA_ROOT, "ASL_Citizen", "splits", "train.csv")
 
 # ========================= 输出路径 =========================
 # 裁剪后的手部图片根目录
@@ -26,10 +26,8 @@ LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 
 # ========================= 图像参数 =========================
 IMAGE_SIZE      = 224     # S2HAND 标准输入 224×224
-BBOX_EXPAND_RATIO = 1.35  # BBox 扩展系数（1.2~1.5 均可）
+BBOX_EXPAND_RATIO = 1.45  # BBox 扩展系数（1.2~1.5 均可）
 
-# ========================= 时序参数 =========================
-SEQ_LEN = 64              # 均匀采样的固定帧数
 
 # ========================= MediaPipe 参数 =========================
 MP_DETECTION_CONFIDENCE = 0.5
@@ -44,3 +42,9 @@ JPEG_QUALITY = 95   # JPEG 保存质量
 # True  → 已处理过的视频直接跳过（断点续跑）
 # False → 强制重新处理所有视频
 SKIP_EXISTING = True
+
+#高斯平滑
+SIGMA=1.7
+
+#debug目录
+DEBUG_OUT_DIR="/home/jm802/sign_language/debug_results"

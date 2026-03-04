@@ -1,12 +1,14 @@
 import os
 import json
 import cv2
+import csv
 import numpy as np
 import mediapipe as mp
 from tqdm import tqdm
 from multiprocessing import Pool
 import logging
 from datetime import datetime
+from scipy.ndimage import gaussian_filter1d
 
 # 导入配置
 import config_3d
@@ -27,26 +29,24 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =============================
+# 全局变量（用于多进程重用对象）
+# =============================
+global_hands = None
+
+def init_worker():
+    """每个 Worker 进程启动时初始化一次 MediaPipe 对象"""
+    global global_hands
+    mp_hands = mp.solutions.hands
+    global_hands = mp_hands.Hands(
+        static_image_mode=False, 
+        max_num_hands=2,
+        min_detection_confidence=config_3d.MP_DETECTION_CONFIDENCE,
+        min_tracking_confidence=config_3d.MP_TRACKING_CONFIDENCE
+    )
+
+# =============================
 # 辅助函数
 # =============================
-
-def get_uniform_frame_indices(total_frames, target_frames):
-    """
-    均匀采样帧索引
-    """
-    if total_frames <= 0:
-        return []
-    
-    if total_frames == target_frames:
-        return list(range(total_frames))
-        
-    # linspace 包含首尾
-    indices = np.linspace(0, total_frames - 1, target_frames)
-    indices = np.round(indices).astype(int)
-    
-    # 确保不越界
-    indices = np.clip(indices, 0, total_frames - 1)
-    return indices.tolist()
 
 def extract_bbox_from_landmarks(landmarks, image_width, image_height):
     """
@@ -56,68 +56,51 @@ def extract_bbox_from_landmarks(landmarks, image_width, image_height):
     if not landmarks:
         return None
         
-    x_coords = [lm.x * image_width for lm in landmarks.landmark]
-    y_coords = [lm.y * image_height for lm in landmarks.landmark]
+    x_coords = [np.clip(lm.x * image_width, 0, image_width-1) for lm in landmarks.landmark]
+    y_coords = [np.clip(lm.y * image_height, 0, image_height-1) for lm in landmarks.landmark]
     
     x_min, x_max = min(x_coords), max(x_coords)
     y_min, y_max = min(y_coords), max(y_coords)
     
     return [x_min, y_min, x_max, y_max]
 
-def merge_bboxes(bbox1, bbox2):
-    """
-    合并两个 BBox，取得它们的最小外接矩形
-    """
-    if bbox1 is None:
-        return bbox2
-    if bbox2 is None:
-        return bbox1
-        
-    x_min = min(bbox1[0], bbox2[0])
-    y_min = min(bbox1[1], bbox2[1])
-    x_max = max(bbox1[2], bbox2[2])
-    y_max = max(bbox1[3], bbox2[3])
-    
-    return [x_min, y_min, x_max, y_max]
 
 def expand_and_clamp_bbox(bbox, expand_ratio, image_width, image_height):
     """
-    向外扩展 BBox，并确保不超出图像边界，同时使其尽量为正方形以便于缩放
+    不仅返回裁剪框，还返回 scale 和 offset 用于后续 3D 还原
     """
     if bbox is None:
-        return None
+        return None, None
         
     x_min, y_min, x_max, y_max = bbox
-    
-    # 计算当前中心和宽高
     width = x_max - x_min
     height = y_max - y_min
     center_x = x_min + width / 2
     center_y = y_min + height / 2
     
-    # 取最大边以产生正方形 BBox
-    max_side = max(width, height)
+    # S2HAND 喜欢正方形输入，取最大边
+    max_side = max(width, height) * expand_ratio
     
-    # 应用扩展比例
-    new_side = max_side * expand_ratio
+    # 计算最终裁剪区域
+    new_x_min = int(center_x - max_side / 2)
+    new_y_min = int(center_y - max_side / 2)
     
-    # 计算新的边界
-    new_x_min = center_x - new_side / 2
-    new_y_min = center_y - new_side / 2
-    new_x_max = center_x + new_side / 2
-    new_y_max = center_y + new_side / 2
+    # 原始坐标 = (裁剪后坐标 / IMAGE_SIZE) * max_side + new_x_min
+    meta_params = {
+        "offset": [new_x_min, new_y_min],
+        "scale": max_side,
+        "original_size": [image_width, image_height]
+    }
     
-    # 限制在图像边界内
-    new_x_min = max(0, int(new_x_min))
-    new_y_min = max(0, int(new_y_min))
-    new_x_max = min(image_width - 1, int(new_x_max))
-    new_y_max = min(image_height - 1, int(new_y_max))
+    # 实际裁剪边界需限制在图像内
+    crop_box = [
+        max(0, new_x_min),
+        max(0, new_y_min),
+        min(image_width - 1, int(center_x + max_side / 2)),
+        min(image_height - 1, int(center_y + max_side / 2))
+    ]
     
-    # 确保宽度和高度大于0
-    if new_x_max <= new_x_min or new_y_max <= new_y_min:
-        return None
-        
-    return [new_x_min, new_y_min, new_x_max, new_y_max]
+    return crop_box, meta_params
 
 def interpolate_missing_bboxes(bboxes):
     """
@@ -142,207 +125,199 @@ def interpolate_missing_bboxes(bboxes):
         
     return bboxes_arr.astype(int).tolist()
 
+def smooth_bboxes(bboxes, sigma=config_3d.SIGMA):
+    """
+    对 BBox 序列进行高斯平滑，减少检测框的震颤
+    bboxes: shape (N, 4) 的列表或数组
+    sigma: 标准差，越大越平滑，但过大会产生延迟感 (1.0-2.0 适合手语)
+    """
+    if bboxes is None or len(bboxes) < 3:
+        return bboxes
+    
+    bboxes_arr = np.array(bboxes, dtype=np.float64)
+    smoothed_bboxes = np.zeros_like(bboxes_arr)
+    
+    # 分别对 x_min, y_min, x_max, y_max 进行平滑
+    for i in range(4):
+        smoothed_bboxes[:, i] = gaussian_filter1d(bboxes_arr[:, i], sigma=sigma)
+    
+    return smoothed_bboxes.tolist()
+
+def save_hand_sequence(frames, bboxes_and_metas, output_dir, flip=False):
+    os.makedirs(output_dir, exist_ok=True)
+    metadata = []
+    
+    for i, (image, item) in enumerate(zip(frames, bboxes_and_metas)):
+        bbox, meta = item
+        x_min, y_min, x_max, y_max = bbox
+        crop_img = image[y_min:y_max+1, x_min:x_max+1]
+        
+        if crop_img.size == 0:
+            continue
+
+        # 缩放
+        resized_img = cv2.resize(crop_img, (config_3d.IMAGE_SIZE, config_3d.IMAGE_SIZE), interpolation=cv2.INTER_AREA)
+        
+        if flip:
+            resized_img = cv2.flip(resized_img, 1)
+            
+        save_path = f"frame_{i:04d}.jpg"
+        cv2.imwrite(os.path.join(output_dir, save_path), cv2.cvtColor(resized_img, cv2.COLOR_RGB2BGR))
+        
+        # 存入本帧元数据
+        meta["frame_idx"] = i
+        meta["file_name"] = save_path
+        meta["is_flipped"] = flip
+        metadata.append(meta)
+    
+    # 保存该手部序列的完整索引信息
+    with open(os.path.join(output_dir, "meta.json"), "w") as f:
+        json.dump(metadata, f, indent=4)
+    
+    return len(metadata) > 0
+
+
 # =============================
 # 核心处理流程
 # =============================
 
 def process_video_task(args):
     """
-    单个视频处理任务（用于多进程调度）
+    单个视频处理任务：提取、插值、裁剪并保存左右手序列及元数据
+    增加了自适应采样与首尾无效帧过滤
     """
-    video_id, subset, gloss_label, start_frame, end_frame = args
+    global global_hands
+    video_file, gloss_label = args
     
-    vid_path = os.path.join(config_3d.VIDEO_DIR, f"{video_id}.mp4")
-    bbox_cache_path = os.path.join(config_3d.BBOX_CACHE_DIR, f"{video_id}.npy")
-    output_dir = os.path.join(config_3d.HAND_CROP_DIR, gloss_label, subset, video_id)
+    vid_path = os.path.join(config_3d.VIDEO_DIR, video_file)
+    video_id = os.path.splitext(video_file)[0]
+    # 输出路径: HAND_CROP_DIR / Gloss / VideoID
+    output_dir_base = os.path.join(config_3d.HAND_CROP_DIR, gloss_label, video_id)
     
-    # 1. 检查断点续传
-    if config_3d.SKIP_EXISTING and os.path.exists(bbox_cache_path) and os.path.exists(output_dir):
-        # 简单检查输出图片数量
-        if len(os.listdir(output_dir)) == config_3d.SEQ_LEN:
-            return True, video_id, "Skipped (Already exists)"
-            
     if not os.path.exists(vid_path):
         return False, video_id, f"Video not found: {vid_path}"
         
     try:
+        # 1. 完整读取视频所有帧 (1-2秒短视频直接全读进内存更高效)
         cap = cv2.VideoCapture(vid_path)
         if not cap.isOpened():
             return False, video_id, "Failed to open video"
             
-        # 统计有效帧范围
-        total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if start_frame == -1: start_frame = 0
-        if end_frame == -1 or end_frame >= total_video_frames: end_frame = total_video_frames - 1
-        
-        valid_frame_count = end_frame - start_frame + 1
-        
-        if valid_frame_count < config_3d.SEQ_LEN // 2:
-            cap.release()
-            return False, video_id, f"Video too short ({valid_frame_count} valid frames)"
-            
-        # 2. 采样帧索引
-        sample_indices = get_uniform_frame_indices(valid_frame_count, config_3d.SEQ_LEN)
-        # 映射回视频的绝对帧号
-        absolute_indices = [idx + start_frame for idx in sample_indices]
-        
-        # 读取需要的帧
-        sampled_frames = []
-        sampled_frames_raw_h_w = []
-        for frame_idx in absolute_indices:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+        all_frames = []
+        while True:
             ret, frame = cap.read()
             if not ret:
-                # 容错：如果读取失败，复用上一帧
-                if sampled_frames:
-                    sampled_frames.append(sampled_frames[-1].copy())
-                    sampled_frames_raw_h_w.append(sampled_frames_raw_h_w[-1])
-                continue
-                
-            sampled_frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            sampled_frames_raw_h_w.append(frame.shape[:2])
-            
+                break
+            all_frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         cap.release()
         
-        # 应对末尾由于某些原因没有读够的情况
-        while len(sampled_frames) < config_3d.SEQ_LEN:
-            sampled_frames.append(sampled_frames[-1].copy())
-            sampled_frames_raw_h_w.append(sampled_frames_raw_h_w[-1])
-            
-            
-        # 3. 初始化 MediaPipe Hands
-        mp_hands = mp.solutions.hands
-        hands = mp_hands.Hands(
-            static_image_mode=True, # 处理采样的离散帧，推荐 True
-            max_num_hands=config_3d.MP_MAX_NUM_HANDS,
-            min_detection_confidence=config_3d.MP_DETECTION_CONFIDENCE,
-            min_tracking_confidence=config_3d.MP_TRACKING_CONFIDENCE
-        )
+        total_frames = len(all_frames)
+        if total_frames < 8: # 极度过短的视频直接放弃
+            return False, video_id, f"Video too short ({total_frames} frames)"        
         
-        raw_bboxes = []
-        # 4. 执行检测
-        for i, image in enumerate(sampled_frames):
-            results = hands.process(image)
-            image_h, image_w = sampled_frames_raw_h_w[i]
+        raw_bboxes_R, raw_bboxes_L = [], []
+        
+        # 3. 逐帧检测左右手，获取完整轨迹
+        for image in all_frames:
+            results = global_hands.process(image)
+            image_h, image_w = image.shape[:2]
             
-            frame_bbox = None
-            if results.multi_hand_landmarks:
-                for hand_landmarks in results.multi_hand_landmarks:
-                    hand_bbox = extract_bbox_from_landmarks(hand_landmarks, image_w, image_h)
-                    frame_bbox = merge_bboxes(frame_bbox, hand_bbox)
+            bbox_R, bbox_L = None, None
+            if results.multi_hand_landmarks and results.multi_handedness:
+                for idx, hand_info in enumerate(results.multi_handedness):
+                    label = hand_info.classification[0].label 
+                    bbox = extract_bbox_from_landmarks(results.multi_hand_landmarks[idx], image_w, image_h)
                     
-            raw_bboxes.append(frame_bbox)
+                    if label == 'Right': bbox_L = bbox
+                    elif label == 'Left': bbox_R = bbox
+                        
+            raw_bboxes_R.append(bbox_R)
+            raw_bboxes_L.append(bbox_L)
             
-        hands.close()
         
-        # 5. 插值与拓展
-        interpolated_bboxes = interpolate_missing_bboxes(raw_bboxes)
-        
-        if interpolated_bboxes is None:
-            return False, video_id, "No hands detected in the entire sequence"
+        # 4. 后处理与自适应保存
+        results_report = []
+        for side, raw_bboxes, should_flip in [("R", raw_bboxes_R, False), ("L", raw_bboxes_L, True)]:
+            valid_indices = [idx for idx, b in enumerate(raw_bboxes) if b is not None]
+            if not valid_indices:
+                results_report.append(f"{side}:No_Detection")
+                continue
+                
+            start_f, end_f = valid_indices[0], valid_indices[-1]
+            active_len = end_f - start_f + 1
+            if active_len < 8: continue
+
+            target_count = max(16, min(active_len, 64))
+            sample_indices = np.round(np.linspace(start_f, end_f, target_count)).astype(int).tolist()
             
-        final_bboxes = []
-        for i, bbox in enumerate(interpolated_bboxes):
-            image_h, image_w = sampled_frames_raw_h_w[i]
-            expanded = expand_and_clamp_bbox(bbox, config_3d.BBOX_EXPAND_RATIO, image_w, image_h)
-            if expanded is None:
-                # 极端异常情况回退
-                expanded = [0, 0, image_w-1, image_h-1]
-            final_bboxes.append(expanded)
+            sampled_frames = [all_frames[idx] for idx in sample_indices]
+            sampled_bboxes = [raw_bboxes[idx] for idx in sample_indices]
             
-        # 6. 保存 BBox 缓存
-        os.makedirs(os.path.dirname(bbox_cache_path), exist_ok=True)
-        np.save(bbox_cache_path, np.array(final_bboxes, dtype=np.int32))
-        
-        # 7. 裁剪图像并保存
-        os.makedirs(output_dir, exist_ok=True)
-        for i, (image, bbox) in enumerate(zip(sampled_frames, final_bboxes)):
-            x_min, y_min, x_max, y_max = bbox
-            crop_img = image[y_min:y_max+1, x_min:x_max+1]
-            
-            # 容错
-            if crop_img.size == 0:
-                 crop_img = image # 容错
-                 
-            resized_img = cv2.resize(crop_img, (config_3d.IMAGE_SIZE, config_3d.IMAGE_SIZE), interpolation=cv2.INTER_AREA)
-            resized_img_bgr = cv2.cvtColor(resized_img, cv2.COLOR_RGB2BGR)
-            
-            save_path = os.path.join(output_dir, f"frame_{i:04d}.jpg")
-            
-            # 也可以在这里传参做 jpeg 压缩控制，这里为了简便使用 opencv 默认
-            encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), config_3d.JPEG_QUALITY]
-            cv2.imwrite(save_path, resized_img_bgr, encode_param)
-            
-        return True, video_id, "Success"
+            interp_bboxes = interpolate_missing_bboxes(sampled_bboxes)
+            if interp_bboxes:
+                smoothed_bboxes = smooth_bboxes(interp_bboxes, sigma=config_3d.SIGMA)
+                combined_data = []
+                for i, b in enumerate(smoothed_bboxes):
+                    h, w = sampled_frames[i].shape[:2]
+                    c_box, c_meta = expand_and_clamp_bbox(b, config_3d.BBOX_EXPAND_RATIO, w, h)
+                    if c_box is None: c_box = [0, 0, 223, 223]
+                    c_meta["original_start_frame"] = start_f
+                    combined_data.append((c_box, c_meta))
+                
+                success = save_hand_sequence(sampled_frames, combined_data, os.path.join(output_dir_base, side), flip=should_flip)
+                results_report.append(f"{side}:Success({target_count}f)")
+
+        return True, video_id, f"Details: {', '.join(results_report)}"
         
     except Exception as e:
-         return False, video_id, f"Exception: {str(e)}"
-
+        return False, video_id, str(e)
 # =============================
 # 主控入口
 # =============================
 
 def process_dataset():
-    logger.info("Starting 3D Hand ROI Preprocessing...")
-    logger.info(f"JSON Config: {config_3d.SPLIT_JSON_PATH}")
+    logger.info("Starting ASL Citizen 3D Hand ROI Preprocessing...")
     
-    if not os.path.exists(config_3d.SPLIT_JSON_PATH):
-        logger.error(f"Cannot find split JSON file: {config_3d.SPLIT_JSON_PATH}")
+    # 读取 ASL Citizen 表格 (TSV 或 CSV 格式)
+    # 获取 CSV 路径（确保 config_3d.py 里的 CSV_PATH 指向了 splits/ 下的文件）
+    csv_path = getattr(config_3d, 'CSV_PATH', None)
+    
+    if not csv_path or not os.path.exists(csv_path):
+        logger.error(f"Cannot find CSV file: {csv_path}")
         return
         
-    with open(config_3d.SPLIT_JSON_PATH, "r") as f:
-        split_data = json.load(f)
-        
-    # 构建任务列表
-    # split_data 格式: video_id: {subset: 'train', action: [label_idx, start, end]}
-    # 需要把 label_idx 转成分类名作为目录存储更好，或者直接用 index 字符串
-    
     tasks = []
-    for video_id, info in split_data.items():
-        subset = info["subset"]
-        label_idx = info["action"][0]
-        start_frame = info["action"][1]
-        end_frame = info["action"][2]
-        
-        # 将 glossary ID 作为字符串
-        gloss_label = f"{label_idx:03d}" 
-        
-        tasks.append((video_id, subset, gloss_label, start_frame, end_frame))
-        
-    logger.info(f"Total videos to process: {len(tasks)}")
-    logger.info(f"Num Workers: {config_3d.NUM_WORKERS if config_3d.NUM_WORKERS > 0 else 'Auto'}")
-    
-    num_workers = config_3d.NUM_WORKERS if config_3d.NUM_WORKERS > 0 else None
-    
-    success_count = 0
-    fail_count = 0
-    fail_details = []
-    
-    # 使用多进程池加速
-    with Pool(processes=num_workers) as pool:
-        # 使用 tqdm 显示进度
-        results = list(tqdm(pool.imap_unordered(process_video_task, tasks), total=len(tasks), desc="Processing Videos"))
-        
-        for success, vid, msg in results:
-            if success:
-                success_count += 1
-            else:
-                fail_count += 1
-                fail_details.append(f"{vid}: {msg}")
-                logger.warning(f"Failed: {vid} - {msg}")
+    # 使用','分隔符读取
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = csv.DictReader(f, delimiter=',')
+        for row in reader:
+            video_file = row.get('Video file')
+            gloss = row.get('Gloss')
+            if video_file and gloss:
+                tasks.append((video_file, gloss))
                 
+    logger.info(f"Total videos to process: {len(tasks)}")
+    num_workers = getattr(config_3d, 'NUM_WORKERS', 4)
+    
+    success_count, fail_count = 0, 0
+    
+    with Pool(processes=config_3d.NUM_WORKERS,initializer=init_worker) as pool:
+        results = list(tqdm(pool.imap_unordered(process_video_task, tasks), total=len(tasks), desc="Processing Videos"))
+
+        with open(os.path.join(config_3d.LOG_DIR, "failed_videos.txt"), "w") as f_fail:
+            for success, vid, msg in results:
+                if success:
+                    success_count += 1
+                else:
+                    fail_count += 1
+                    f_fail.write(f"{vid}\t{msg}\n")
+                    logger.warning(f"Failed: {vid} - {msg}")
+                    
     logger.info("=" * 40)
-    logger.info("Processing Summary:")
     logger.info(f"Total Attempted: {len(tasks)}")
     logger.info(f"Successful: {success_count}")
     logger.info(f"Failed: {fail_count}")
-    
-    if fail_count > 0:
-        logger.info("\nFirst 10 Failures:")
-        for fd in fail_details[:10]:
-            logger.info(f" - {fd}")
-            
-    logger.info("Data preprocessing completed.")
+    logger.info("Preprocessing completed.")
 
 if __name__ == "__main__":
     process_dataset()
