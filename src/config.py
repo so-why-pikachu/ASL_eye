@@ -16,6 +16,12 @@ SAVE_NPY_DIR = os.path.join(DATA_ROOT, "processed_features_300")
 # 结果目录
 RESULT_DIR = "/home/jm802/sign_language/result"
 MODEL_SAVE_PATH = os.path.join(RESULT_DIR, "checkpoints")
+MODEL_PATH="/home/jm802/sign_language/result/checkpoints/best_model_300.pth"
+
+MEAN_PATH="/home/jm802/sign_language/data/global_mean_300_double_vel.npy"
+STD_PATH="/home/jm802/sign_language/data/global_std_300_double_vel.npy"
+
+IDX2NAME_PATH="/home/jm802/sign_language/data/idx2name_300.pkl"
 
 # ================= 数据参数 =================
 # MediaPipe特征维度计算:
