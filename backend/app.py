@@ -1,42 +1,101 @@
 import os
-import torch
+import sys
+import cv2
+import tempfile
+import numpy as np
 import pymysql
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-from src.model import BiLSTMAttentionModel
-import src.config as config
+
+# 将 src 目录加入搜索路径，以便导入推理流水线
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
+
+import config
+from inference_camera import SignLanguageInferencePipeline
 
 app = Flask(__name__)
 CORS(app)
 
 # 配置
-GLB_ROOT =config.GLB_ROOT
-MODEL_PATH =config.MODEL_PATH
+GLB_ROOT = config.GLB_ROOT
 DB_CONFIG = {'host': 'localhost', 'user': 'root', 'password': '123456', 'db': 'sign_language_db'}
 
-# 初始化推理引擎
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = BiLSTMAttentionModel(input_size=config.INPUT_SIZE, hidden_size=config.HIDDEN_SIZE, num_classes=config.NUM_CLASSES, num_layers=config.NUM_LAYERS,dropout=0)
 
-# 强力加载逻辑
-sd = torch.load(MODEL_PATH, map_location=device)
-new_sd = { (k[7:] if k.startswith('module.') else k): v for k, v in sd.items() }
-model.load_state_dict(new_sd, strict=False)
-model.to(device).eval()
+# 复用 inference_camera.py 的完整推理流水线
+# 包含：模型加载、归一化统计量、标签映射、平滑器
+pipeline = SignLanguageInferencePipeline(model_path=config.MODEL_PATH)
 
-# --- 2. 接口实现 ---
 
 @app.route('/api/sign/predict', methods=['POST'])
 def predict():
-    # 1. 接收特征 -> 2. 推理 -> 3. 映射 ID 到 Name
-    # 逻辑参考你之前的 pipeline.predict
-    return jsonify({"code": 200, "data": {"word_name": "ACCIDENT"}})
+    """
+    POST /api/sign/predict  (multipart/form-data)
+    字段: video — 用户录制的手语视频 (mp4/webm/avi)
+
+    后端处理流程 (直接复用 inference_camera.py):
+      1. OpenCV 逐帧解码视频
+      2. pipeline.extract_features(frame) → 134 维坐标
+      3. pipeline.smoother.smooth(raw_feat) → 平滑
+      4. pipeline.predict(frame_buffer)
+         内部: preprocess_sequence → 双重相对坐标 + 线性抽样 → 模型推理
+    """
+    # 接收视频文件
+    if 'video' not in request.files:
+        return jsonify({"code": 400, "message": "Missing 'video' field"}), 400
+
+    video_file = request.files['video']
+
+    # 保存到临时文件 (OpenCV 需要文件路径)
+    suffix = os.path.splitext(video_file.filename)[1] or '.mp4'
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    tmp_path = tmp.name
+    video_file.save(tmp_path)
+    tmp.close()
+
+    try:
+        # OpenCV 逐帧解码
+        cap = cv2.VideoCapture(tmp_path)
+        if not cap.isOpened():
+            return jsonify({"code": 400, "message": "Cannot decode video file"}), 400
+
+        frame_buffer = []
+        pipeline.smoother.prev_landmarks = None  # 每次请求重置平滑器
+
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            # 提取 134 维特征 + 平滑 (与摄像头推理完全一致)
+            raw_feat = pipeline.extract_features(frame)
+            smooth_feat = pipeline.smoother.smooth(raw_feat)
+            if smooth_feat is not None:
+                frame_buffer.append(smooth_feat)
+
+        cap.release()
+
+        # 帧数检查
+        if len(frame_buffer) < 5:
+            return jsonify({"code": 400, "message": "Video too short, minimum 5 frames required"}), 400
+
+        # 推理 (内部: 双重相对坐标 + 归一化 + 线性插值到64帧 + 模型前向)
+        word_name, confidence = pipeline.predict(frame_buffer)
+
+        return jsonify({
+            "code": 200,
+            "data": {
+                "word_name": word_name,
+                "confidence": round(float(confidence), 4)
+            }
+        })
+
+    finally:
+        os.unlink(tmp_path)  # 清理临时文件
 
 @app.route('/api/sign/downloads', methods=['GET'])
 def downloads():
     word = request.args.get('name')
     
-    # 1. 从 MySQL 查文件夹名
+    # 从 MySQL 查文件夹名
     conn = pymysql.connect(**DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
     with conn.cursor() as cursor:
         cursor.execute("SELECT folder_name FROM sign_assets WHERE word_name = %s", (word,))
@@ -49,7 +108,7 @@ def downloads():
     folder = row['folder_name']
     abs_path = os.path.join(GLB_ROOT, folder)
     
-    # 2. 递归/遍历所有 .glb
+    # 递归/遍历所有 .glb
     urls = []
     for root, _, files in os.walk(abs_path):
         for f in files:
