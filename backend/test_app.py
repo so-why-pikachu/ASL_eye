@@ -27,7 +27,7 @@ def db_conn():
 @pytest.fixture(scope="session")
 def test_video_bytes():
     """读取项目中真实的测试视频文件"""
-    video_path = os.path.join(os.path.dirname(__file__), '..', 'src', 'assets', 'video', 'banana.mp4')
+    video_path = os.path.join(os.path.dirname(__file__), '..', 'frontend','src', 'assets', 'video', 'banana.mp4')
     video_path = os.path.abspath(video_path)
     assert os.path.exists(video_path), f"测试视频不存在: {video_path}"
     with open(video_path, "rb") as f:

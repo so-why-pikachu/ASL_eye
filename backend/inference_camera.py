@@ -93,10 +93,27 @@ class SignLanguageInferencePipeline:
                     
         if json_path and os.path.exists(json_path):
             try:
-                if json_path.endswith('.pkl'):
+                if json_path.endswith('.txt'):
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            line = line.strip()
+                            if not line:
+                                continue
+                            
+                            parts = line.split()
+                            
+                            if len(parts) >= 2:
+                                try:
+                                    lbl_id = int(parts[0])
+                                    word = parts[1]
+                                    self.label_map[lbl_id] = word
+                                except ValueError:
+                                    continue
+                    print(f"✅ Successfully loaded {len(self.label_map)} classes from TXT.")
+                elif json_path.endswith('.pkl'):
                     with open(json_path, 'rb') as f:
                         self.label_map = pickle.load(f)
-                    print(f"Loaded label map from {json_path}")
+                    print(f"✅ Loaded label map from PKL.")
                 else:
                     with open(json_path, 'r', encoding='utf-8') as f:
                         split_data = json.load(f)
