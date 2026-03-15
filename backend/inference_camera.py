@@ -98,7 +98,6 @@ class SignLanguageInferencePipeline:
                         self.label_map = pickle.load(f)
                     print(f"Loaded label map from {json_path}")
                 else:
-                    import json
                     with open(json_path, 'r', encoding='utf-8') as f:
                         split_data = json.load(f)
                         for word, info in split_data.items():

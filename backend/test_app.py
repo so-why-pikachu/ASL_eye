@@ -1,32 +1,12 @@
-"""
-backend/test_app.py
-真实集成测试 — 连接真实数据库、加载真实模型、使用真实视频文件
-运行前请确保:
-  1. .env 文件已配置 (DB_HOST, DB_USER, DB_PASSWORD, DB_NAME)
-  2. 模型权重文件存在 (config.MODEL_PATH)
-  3. GLB 模型目录存在 (config.GLB_ROOT)
-
-运行方式:
-    cd f:\sign_language
-    python -m pytest backend/test_app.py -v -s
-"""
-
 import os
 import sys
 import io
 import pytest
 import pymysql
 
-# 确保能导入 backend.app
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-
 from backend.app import app, pipeline, DB_CONFIG, GLB_ROOT, init_db, sync_glb_to_db
 from src import config
 
-
-# ============================================================
-# Fixtures
-# ============================================================
 
 @pytest.fixture(scope="session")
 def client():
@@ -53,10 +33,6 @@ def test_video_bytes():
     with open(video_path, "rb") as f:
         return f.read()
 
-
-# ============================================================
-# 1. 启动函数测试
-# ============================================================
 
 class TestStartupFunctions:
     """测试 init_db 和 sync_glb_to_db 的真实执行"""
@@ -109,10 +85,6 @@ class TestStartupFunctions:
             assert row["total_frames"] == glb_count, \
                 f"{row['word_name']}: 数据库帧数 {row['total_frames']} != 磁盘帧数 {glb_count}"
 
-
-# ============================================================
-# 2. 接口一: POST /api/sign/predict
-# ============================================================
 
 class TestPredictEndpoint:
     """测试模型推理接口 (真实模型 + 真实视频)"""

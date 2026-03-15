@@ -7,14 +7,12 @@ import pymysql
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from dotenv import load_dotenv 
+import config
+from inference_camera import SignLanguageInferencePipeline
 
-load_dotenv()
+env_path=config.ENV_PATH
 
-# 将 src 目录加入搜索路径，以便导入推理流水线
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
-
-from src import config
-from src.inference_camera import SignLanguageInferencePipeline
+load_dotenv(env_path)
 
 app = Flask(__name__)
 CORS(app)
@@ -23,6 +21,7 @@ CORS(app)
 GLB_ROOT = config.GLB_ROOT
 
 DB_HOST = os.getenv("DB_HOST")
+DB_PORT = int(os.getenv("DB_PORT", 3307))
 DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")
@@ -30,11 +29,13 @@ DB_NAME = os.getenv("DB_NAME")
 # 供后续请求使用的连接池配置
 DB_CONFIG = {
     'host': DB_HOST,
+    'port': DB_PORT,
     'user': DB_USER,
     'password': DB_PASSWORD,
     'db': DB_NAME,
     'charset': 'utf8mb4'
 }
+
 
 # 数据库自动化初始化
 def init_db():
@@ -43,6 +44,7 @@ def init_db():
         # 此时不指定 db，以便创建尚未存在的数据库
         conn = pymysql.connect(
             host=DB_HOST,
+            port=DB_PORT,
             user=DB_USER,
             password=DB_PASSWORD,
             charset='utf8mb4'
