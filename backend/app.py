@@ -81,26 +81,24 @@ def sync_glb_to_db():
 
     print(f"🔍 开始扫描 GLB 模型目录: {GLB_ROOT} ...")
     try:
-        # 注意：这里使用带 db 的 DB_CONFIG，因为 init_db 已经建好库了
         conn = pymysql.connect(**DB_CONFIG)
         with conn.cursor() as cursor:
-            # 1. 扫描目录下所有文件夹
+            # 扫描目录下所有文件夹
             folders = [f for f in os.listdir(GLB_ROOT) if os.path.isdir(os.path.join(GLB_ROOT, f))]
             sync_count = 0
 
             for folder in folders:
                 try:
-                    # 2. 提取词条名称 (根据你的命名规则 ACCIDENT_xxx-ACCIDENT)
-                    # 如果格式不同，请调整这里的 split 逻辑
+                    # 提取词条名称：ACCIDENT_xxx-ACCIDENT)
                     word_name = folder.split('-')[-1].upper()
                     if not word_name:
                         continue
 
-                    # 3. 统计该文件夹下的总帧数 (.glb 文件数量)
+                    # 统计该文件夹下的总帧数 (.glb 文件数量)
                     folder_path = os.path.join(GLB_ROOT, folder)
                     total_frames = len([f for f in os.listdir(folder_path) if f.endswith('.glb')])
 
-                    # 4. 插入或更新数据库 (利用 uk_word_name 唯一索引)
+                    # 插入或更新数据库 (利用 uk_word_name 唯一索引)
                     # 如果词条已存在，则更新文件夹路径和总帧数
                     sql = """
                         INSERT INTO `sign_assets` (`word_name`, `folder_name`, `total_frames`)
@@ -138,7 +136,7 @@ def predict():
     POST /api/sign/predict  (multipart/form-data)
     字段: video — 用户录制的手语视频 (mp4/webm/avi)
 
-    后端处理流程 (直接复用 inference_camera.py):
+    后端处理流程:
       1. OpenCV 逐帧解码视频
       2. pipeline.extract_features(frame) → 134 维坐标
       3. pipeline.smoother.smooth(raw_feat) → 平滑
@@ -189,7 +187,7 @@ def predict():
         return jsonify({
             "code": 200,
             "data": {
-                "word_name": word_name,
+                "word_name": word_name.lower(),
                 "confidence": round(float(confidence), 4)
             }
         })
@@ -200,11 +198,14 @@ def predict():
 @app.route('/api/sign/downloads', methods=['GET'])
 def downloads():
     word = request.args.get('name')
-    
+
+    # 在这里转为大写，去匹配数据库
+    word_query = word.strip().upper()
+
     # 从 MySQL 查文件夹名
     conn = pymysql.connect(**DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
     with conn.cursor() as cursor:
-        cursor.execute("SELECT folder_name FROM sign_assets WHERE word_name = %s", (word,))
+        cursor.execute("SELECT folder_name FROM sign_assets WHERE word_name = %s", (word_query,))
         row = cursor.fetchone()
     conn.close()
 
@@ -220,12 +221,12 @@ def downloads():
         for f in files:
             if f.endswith('.glb'):
                 rel = os.path.relpath(os.path.join(root, f), GLB_ROOT)
-                urls.append(f"http://{request.host}/static/models/{rel}")
+                urls.append(f"http://{request.host}/result_3d/glb_models/{rel}")
     
     urls.sort() # 确保帧顺序
     return jsonify({"code": 200, "data": {"urls": urls}})
 
-@app.route('/static/models/<path:filename>')
+@app.route('/result_3d/glb_models/<path:filename>')
 def serve_glb(filename):
     return send_from_directory(GLB_ROOT, filename)
 

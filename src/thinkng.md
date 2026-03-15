@@ -132,3 +132,35 @@ hands:
 5. 首先将一张图片提取134维特征，然后增加速度参数，扩展为268维，最后线性插值到64帧（同训练）
 6. 进行推理：将梯度设置为0，利用softmax，输出最可能结果标号与置信度（torch.max(probs,dim=1))
 7. 将mp镜像，就像照镜子一样，在画面画出骨架线，点击屏幕开始录制，再次点击结束录制，并识别出结果。打印出词语与置信度，以及当前采样多少帧
+
+## 后端逻辑
+
+1. 连接mysql，不存在时自动创建sign_language_db数据库，里面只有sign_assets表
+2. 创建sign_assets表:
+
+| 字段名               | 作用                                             |
+| -------------------- | ------------------------------------------------ |
+| id                   | 自增主键（唯一 ID）                              |
+| word_name            | **手语词条** （如 HELP、FATHER、ACCIDENT） |
+| folder_name          | 服务器上真实文件夹名                             |
+| total_frames         | 该词条有多少个 `.glb`3D 模型文件               |
+| created_at           | 创建时间                                         |
+| updated_at           | 更新时间（自动更新）                             |
+| unique_key:word_name | 唯一索引：**词条不能重复(去重)**           |
+
+3. 自动更新：如果词条不存在新增词条，词条存在的话更新路径与帧数（数据没有变化不会更新），我们只操作：word_name,folder_name,total_frames。sync_glb_to_db()运行时，将glb_root递归扫描，保存所有glb文件路径到数据库
+4. 最终表结构：
+
+| id | word_name | folder_name     | total_frames | created_at          | updated_at          |
+| -- | --------- | --------------- | ------------ | ------------------- | ------------------- |
+| 1  | HELLO     | HELLO_123-HELLO | 30           | 2026-03-15 12:00:00 | 2026-03-15 12:00:00 |
+
+5. predict接口：复用推理流水线，opencv逐帧解码视频+提取134维坐标+平滑化+双重相对坐标 + 线性抽样 → 模型推理
+6. 大小写与序号问题：glb的序号与idx2name不同，但是我是使用查找的方式，没有影响。idx2name里面是小写，所以查询到的word是小写（返回前端的也是）。但是glb是大写，所以存储到数据库中时word_name要大写匹配glb的名字
+
+   ```
+   label_text = self.label_map.get(pred_class, f"Class {pred_class}")
+           return label_text, conf
+   ```
+7. downloads接口：通过递归的拼接url:http://{request.host}/result_3d/glb_models/{rel},将这些url返回前端，前端访问这些url时，就能找到本地文件
+8. 通过 `serve_glb` + `send_from_directory`，将本地文件映射为url：http://{request.host}/result_3d/glb_models/{rel}
