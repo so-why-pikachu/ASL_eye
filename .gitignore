@@ -32,4 +32,3 @@ env/
 # 6. 忽略依赖
 node_modules/
 **/node_modules
-.env
