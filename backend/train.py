@@ -15,7 +15,10 @@ BATCH_SIZE = config.BATCH_SIZE
 EPOCHS = config.EPOCHS
 SEQ_LEN  = config.SEQ_LEN
 NUM_CLASSES = config.NUM_CLASSES
-INPUT_SIZE = 268  # 双重相对坐标 + 速度
+INPUT_SIZE = config.INPUT_SIZE  # 双重相对坐标 + 速度
+HIDDEN_SIZE=config.HIDDEN_SIZE
+NUM_LAYERS=config.NUM_LAYERS
+DROP_OUT=config.DROP_OUT
 
 # 数据集 
 train_set = WLASLDataset(os.path.join(config.DATA_ROOT, "train_map_300.txt"), mode='train')
@@ -28,7 +31,7 @@ val_loader   = DataLoader(val_set, batch_size=BATCH_SIZE, shuffle=False, num_wor
 test_loader  = DataLoader(test_set, batch_size=BATCH_SIZE, shuffle=False, num_workers=8, pin_memory=True)
 
 #模型 
-model = BiLSTMAttentionModel(input_size=INPUT_SIZE, hidden_size=256, num_classes=NUM_CLASSES).to(device)
+model = BiLSTMAttentionModel(input_size=INPUT_SIZE, hidden_size=HIDDEN_SIZE, num_classes=NUM_CLASSES,num_layers=NUM_LAYERS,dropout=DROP_OUT).to(device)
 if torch.cuda.device_count() > 1:
     model = nn.DataParallel(model)
 

@@ -16,7 +16,7 @@ class Attention(nn.Module):
         return context
 
 class BiLSTMAttentionModel(nn.Module):
-    def __init__(self, input_size, hidden_size, num_classes, num_layers=2, dropout=0.3):
+    def __init__(self, input_size, hidden_size, num_classes, num_layers, dropout):
         super(BiLSTMAttentionModel, self).__init__()
         self.lstm = nn.LSTM(
             input_size=input_size,
@@ -28,19 +28,19 @@ class BiLSTMAttentionModel(nn.Module):
         )
         self.ln = nn.LayerNorm(hidden_size*2)
         self.attention = Attention(hidden_size)
-        self.fc1 = nn.Linear(hidden_size*2, hidden_size)
-        self.bn1 = nn.BatchNorm1d(hidden_size)
-        self.relu = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)
-        self.fc2 = nn.Linear(hidden_size, num_classes)
+
+        self.classifier = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size), 
+            nn.LayerNorm(hidden_size),            
+            nn.ReLU(),                               
+            nn.Dropout(dropout),                      
+            nn.Linear(hidden_size, num_classes)       
+        )
 
     def forward(self, x):
+        self.lstm.flatten_parameters()
         out, _ = self.lstm(x)  # [B, Seq, Hidden*2]
         out = self.ln(out)
         context = self.attention(out)
-        out = self.fc1(context)
-        out = self.bn1(out)
-        out = self.relu(out)
-        out = self.dropout(out)
-        out = self.fc2(out)
-        return out
+        output = self.classifier(context)
+        return output

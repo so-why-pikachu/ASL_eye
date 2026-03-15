@@ -11,10 +11,10 @@ import config_3d
 import datetime
 
 # 1. 路径与环境配置
-S2HAND_SDK_PATH = config_3d.S2HAND_SDK_PATH
-sys.path.append(S2HAND_SDK_PATH)
-sys.path.append(os.path.join(S2HAND_SDK_PATH, "examples")) 
-sys.path.append(os.path.join(S2HAND_SDK_PATH, "utils"))
+S2HAND_PATH = config_3d.S2HAND_PATH
+sys.path.append(S2HAND_PATH)
+sys.path.append(os.path.join(S2HAND_PATH, "examples")) 
+sys.path.append(os.path.join(S2HAND_PATH, "utils"))
 
 from examples.models_new import Model
 from examples.train_utils import load_model
@@ -30,7 +30,7 @@ from src_3d import config_3d
 
 # 配置日志系统
 def setup_logging():
-    log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+    log_dir = config_3d.LOG_DIR
     os.makedirs(log_dir, exist_ok=True)
     # 以当前时间命名日志文件
     log_filename = datetime.datetime.now().strftime("inference_%Y%m%d_%H%M%S.log")
@@ -78,7 +78,7 @@ def init_engine():
     return model, device
 
 @torch.no_grad()
-def run_batch_inference(model, device, folder_path, is_flipped,batch_size=32):
+def run_batch_inference(model, device, folder_path,side,batch_size=32):
     img_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.jpg')])
     if not img_files: return None
 
@@ -89,7 +89,15 @@ def run_batch_inference(model, device, folder_path, is_flipped,batch_size=32):
         batch_files = img_files[i : i + batch_size]
         
         # 打包当前块
-        imgs = torch.stack([transform(Image.open(os.path.join(folder_path, f)).convert('RGB')) for f in batch_files]).to(device)
+        batch_imgs = []
+        for f in batch_files:
+            img_pil = Image.open(os.path.join(folder_path, f)).convert('RGB')
+            if side == 'L':
+                img_pil = img_pil.transpose(Image.FLIP_LEFT_RIGHT)
+            batch_imgs.append(transform(img_pil))
+        
+        imgs = torch.stack(batch_imgs).to(device)
+
         K = torch.eye(4).unsqueeze(0).repeat(len(batch_files), 1, 1).to(device)
         
         # 核心推理
@@ -110,12 +118,11 @@ def run_batch_inference(model, device, folder_path, is_flipped,batch_size=32):
     pose = np.concatenate(all_pose, axis=0)         # (N, 48)
     shape = np.concatenate(all_shape, axis=0)       # (N, 10)
 
-    if is_flipped:
-        # 1. X 轴取反：将坐标从伪右手空间还原到真实的左手空间
+    # 如果是左手，将推理出的伪右手 3D 坐标在 X 轴上翻转回左手
+    if side == 'L':
         joints[:, :, 0] = -joints[:, :, 0]
         vertices[:, :, 0] = -vertices[:, :, 0]
-        # 注意：这里的 vertices 已经变成了左手拓扑，渲染时必须配合 MANO_LEFT.pkl 并交换面片索引！
-
+        # 后续在 render_3d.py 中渲染左手时，必须使用 MANO_LEFT.pkl 的面片，或者对 MANO_RIGHT 的面片做 [0, 2, 1] 绕序反转。
     
     return {"joints": joints, "vertices": vertices, "pose": pose, "shape": shape, "camera": None}
 
@@ -164,14 +171,9 @@ def build_database():
                 if not os.path.exists(target_dir) or not os.path.exists(meta_path):
                     continue
                 
-                # 读取 meta 确定是否需要翻转
                 try:
-                    with open(meta_path, 'r') as f:
-                        meta_data = json.load(f)
-                        is_flipped = meta_data[0]['is_flipped']
-                
                     # 核心推理：获取 3D 坐标
-                    data = run_batch_inference(model, device, target_dir, is_flipped)
+                    data = run_batch_inference(model, device, target_dir, side)
                     
                     if data is not None:
                         # 创建存储目录：db_root/词条/视频ID/
@@ -180,13 +182,16 @@ def build_database():
                         
                         # 存储为压缩格式 .npz
                         save_path = os.path.join(save_dir, f"data_{side}.npz")
+
+                        is_flipped_flag = True if side == 'L' else False
+
                         np.savez_compressed(
                             save_path,
                             joints=data['joints'],
                             pose=data['pose'],
                             shape=data['shape'],
                             vertices=data['vertices'],
-                            is_flipped=is_flipped
+                            is_flipped=is_flipped_flag
                         )
                         has_data_in_this_vid=True
                     else:
@@ -195,7 +200,7 @@ def build_database():
                     logging.warning(f"跳过视频 {gloss}/{vid_id}/{side}: {str(e)}")
                     error_count += 1
             
-# 成功处理一个视频 ID 后自增计数
+            # 成功处理一个视频 ID 后自增计数
             if has_data_in_this_vid:
                 processed_count += 1
 
