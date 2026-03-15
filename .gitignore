@@ -28,7 +28,9 @@ misc
 # 5. 忽略虚拟环境
 venv/
 env/
+.env
 
 # 6. 忽略依赖
 node_modules/
 **/node_modules
+backend/.env

@@ -2,7 +2,7 @@ import Banana from '../../assets/image/banana.png'
 import Hello from '../../assets/image/hello.png'
 import Baby from '../../assets/image/baby.png'
 import Bread from '../../assets/image/bread.png'
-import Halloween from '../../assets/image/halloween.png'
+import Halloween from '../../assets/image/Halloween.png'
 
 import DynamicWordBox from '../../shared/components/DynamicWordBOX.tsx';
 

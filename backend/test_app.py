@@ -5,7 +5,7 @@ import pytest
 import pymysql
 
 from backend.app import app, pipeline, DB_CONFIG, GLB_ROOT, init_db, sync_glb_to_db
-from src import config
+import config
 
 
 @pytest.fixture(scope="session")
