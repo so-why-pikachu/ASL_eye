@@ -23,6 +23,8 @@ STD_PATH="/home/jm802/sign_language/data/global_std_300_double_vel.npy"
 
 IDX2NAME_PATH="/home/jm802/sign_language/data/idx2name_300.pkl"
 
+GLB_ROOT="/home/jm802/sign_language/result_3d/glb_models"
+
 # 数据参数 
 # MediaPipe特征维度计算:
 # Pose(只取上半身0-24点=25个) * 2(x,y) = 50
