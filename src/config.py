@@ -23,20 +23,26 @@ STD_PATH="/home/jm802/sign_language/data/global_std_300_double_vel.npy"
 
 IDX2NAME_PATH="/home/jm802/sign_language/data/idx2name_300.pkl"
 
-# ================= 数据参数 =================
+# 数据参数 
 # MediaPipe特征维度计算:
 # Pose(只取上半身0-24点=25个) * 2(x,y) = 50
 # Left Hand(21个) * 2(x,y) = 42
 # Right Hand(21个) * 2(x,y) = 42
 # 加速度 Δx, Δy
 #268维
-INPUT_SIZE = 268    
+INPUT_SIZE = 268
+HIDDEN_SIZE= 512     
 
 SEQ_LEN = 64         # 序列统一长度
 NUM_CLASSES = 300    # 类别数
+NUM_LAYERS=2
+DROP_OUT=0.3
 
-# ================= 训练参数 =================
+# 训练参数 
 BATCH_SIZE = 64
 EPOCHS = 80
 LEARNING_RATE = 1e-3
-DEVICE = "cuda"      # 你的环境有GPU，务必用cuda
+DEVICE = "cuda"  
+
+#推理参数
+ALPHA=0.6

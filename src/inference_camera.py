@@ -15,7 +15,7 @@ from model import BiLSTMAttentionModel
 from core_preprocess import to_double_relative_with_velocity
 
 class LandmarkSmoother:
-    def __init__(self, alpha=0.6):
+    def __init__(self, alpha=config.ALPHA):
         self.alpha = alpha
         self.prev_landmarks = None
 
@@ -35,23 +35,26 @@ class SignLanguageInferencePipeline:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print(f"Using device: {self.device}")
         
-        # 1. 初始化 MediaPipe Holistic
+        # 初始化 MediaPipe Holistic
         self.mp_holistic = mp.solutions.holistic
         self.holistic = self.mp_holistic.Holistic(
             static_image_mode=False,
-            model_complexity=1,
+            model_complexity=2,
             smooth_landmarks=True
         )
         
         # 2. 加载全量模型数据
         self.seq_len = config.SEQ_LEN
         self.num_classes = config.NUM_CLASSES
-        self.input_size = config.INPUT_SIZE  # 268
+        self.input_size = config.INPUT_SIZE #268
+        self.hidden_size=config.HIDDEN_SIZE# 268
+        self.num_layers=config.NUM_LAYERS
         
         self.model = BiLSTMAttentionModel(
             input_size=self.input_size, 
-            hidden_size=256, 
+            hidden_size=self.hidden_size, 
             num_classes=self.num_classes,
+            num_layers=self.num_layers,
             dropout=0.0
         ).to(self.device)
         
@@ -67,7 +70,7 @@ class SignLanguageInferencePipeline:
         self.model.eval()
         print(f"Loaded model weights from {model_path}")
 
-        # 3. 加载归一化统计量（如果提供）
+        # 3. 加载归一化统计量
         self.mean = None
         self.std = None
         
@@ -81,7 +84,7 @@ class SignLanguageInferencePipeline:
             self.std = np.load(std_path).astype(np.float32)
             print(f"Loaded normalization stats from {mean_path}")
         else:
-            print("Warning: Normalization stats not found. Inference might be inaccurate if the model was trained with normalized data!")
+            print("🔴 WARNING: Normalization stats not found. Inference might be inaccurate if the model was trained with normalized data 🔴")
             
         # 4. 加载标签映射
         self.label_map = {}
@@ -104,9 +107,9 @@ class SignLanguageInferencePipeline:
                                 self.label_map[lbl_id] = word
                     print(f"Loaded label map from {json_path}")
             except Exception as e:
-                print(f"Failed to load label map: {e}")
+                print(f"🔴 WARNING:Failed to load label map: {e}")
         
-        self.smoother = LandmarkSmoother(alpha=0.6)
+        self.smoother = LandmarkSmoother(alpha=config.ALPHA)
         
     def extract_features(self, frame):
         """单帧提取134维特征"""
@@ -145,14 +148,14 @@ class SignLanguageInferencePipeline:
             
         raw_seq = np.array(raw_seq, dtype=np.float32)
         
-        # 1. 提取双相对坐标与速度 -> 维度变为 (T, 268)
+        # 提取双相对坐标与速度 -> 维度变为 (T, 268)
         data = to_double_relative_with_velocity(raw_seq)
         
-        # 2. 归一化
+        # 归一化
         if self.mean is not None:
             data = (data - self.mean) / self.std
             
-        # 3. 线性索引抽样
+        # 线性索引抽样
         idx = np.linspace(0, len(data) - 1, self.seq_len)
         idx = np.round(idx).astype(int)
         data = data[idx]
