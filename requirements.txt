@@ -1,0 +1,8 @@
+Flask==3.0.2
+Flask-Cors==4.0.0
+PyMySQL==1.1.0
+python-dotenv==1.0.1
+numpy==1.26.4
+opencv-python-headless==4.9.0.80
+torch==2.2.1
+mediapipe==0.10.11

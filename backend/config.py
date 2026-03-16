@@ -3,7 +3,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # 数据根目录
-DATA_ROOT = "f:/sign_language/data"
+DATA_ROOT = os.getenv("DATA_ROOT", "f:/sign_language/data")
 
 # 原始视频目录
 VIDEO_DIR = os.path.join(DATA_ROOT, "wlasl-complete", "videos")
@@ -14,18 +14,22 @@ SPLIT_JSON_PATH = os.path.join(DATA_ROOT, "wlasl-complete", "nslt_300.json")
 SAVE_NPY_DIR = os.path.join(DATA_ROOT, "processed_features_300")
 
 # 结果目录
-RESULT_DIR = "f:/sign_language/result"
+RESULT_DIR = os.getenv("RESULT_DIR", "f:/sign_language/result")
 MODEL_SAVE_PATH = os.path.join(RESULT_DIR, "checkpoints")
-MODEL_PATH="f:/sign_language/result/checkpoints/best_model_300.pth"
+MODEL_PATH = os.getenv("MODEL_PATH", os.path.join(RESULT_DIR, "checkpoints", "best_model_300.pth"))
 
-MEAN_PATH="f:/sign_language/data/global_mean_300_double_vel.npy"
-STD_PATH="f:/sign_language/data/global_std_300_double_vel.npy"
+MEAN_PATH=os.getenv("MEAN_PATH", os.path.join(DATA_ROOT, "global_mean_300_double_vel.npy"))
+STD_PATH=os.getenv("STD_PATH", os.path.join(DATA_ROOT, "global_std_300_double_vel.npy"))
 
-IDX2NAME_PATH="f:/sign_language/data/idx2name_300.txt"
+IDX2NAME_PATH=os.getenv("IDX2NAME_PATH", os.path.join(DATA_ROOT, "idx2name_300.txt"))
 
-GLB_ROOT="f:/sign_language/result_3d/glb_models"
+GLB_ROOT=os.getenv("GLB_ROOT", "f:/sign_language/result_3d/glb_models")
 
-ENV_PATH="f:/sign_language/backend/.env"
+# Handle .env file location: check backend dir first, then project root (where docker-compose expects it)
+local_env = os.path.join(BASE_DIR, "backend", ".env")
+root_env = os.path.join(BASE_DIR, ".env")
+
+ENV_PATH=os.getenv("ENV_PATH", local_env if os.path.exists(local_env) else root_env)
 
 # 数据参数 
 # MediaPipe特征维度计算:

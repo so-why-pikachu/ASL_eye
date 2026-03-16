@@ -164,3 +164,9 @@ hands:
    ```
 7. downloads接口：通过递归的拼接url:http://{request.host}/result_3d/glb_models/{rel},将这些url返回前端，前端访问这些url时，就能找到本地文件
 8. 通过 `serve_glb` + `send_from_directory`，将本地文件映射为url：http://{request.host}/result_3d/glb_models/{rel}
+
+### 十四、docker
+1. .env 文件路径：backend/config.py 里添加了找 .env 文件的逻辑，它会先找 backend/.env，如果没找到就去项目的根目录找 .env。由于 docker-compose 在运行时通常会将环境变量直接注入或者挂载到容器内，也在 docker-compose.yml 中配置了读取根目录下的 .env 并增加了一个专门的环境变量 ENV_PATH=/app/.env。
+2. DATA_ROOT 数据卷：docker-compose.yml 的 environment 里补上了对 DATA_ROOT、GLB_ROOT、RESULT_DIR 等路径在 Docker 内部对应路径的环境变量覆盖配置。
+3. 依赖补全：补全了 requirements.txt 以满足 Flask 运行所需的全部依赖。
+4. 相关的 Dockerfile 和 docker-compose.yml 已经完成。如果要运行，把项目根目录（f:\sign_language）下的 .env.example 复制一份改名为 .env，填入你的 MySQL 密码，然后运行 docker-compose up --build 即可。
