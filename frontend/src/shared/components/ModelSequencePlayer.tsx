@@ -1,54 +1,66 @@
-import React, { useRef, Suspense, useEffect } from 'react';
+import React, { useRef, Suspense, useEffect, useState } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { OrbitControls, Stage, useGLTF, Html, useProgress } from '@react-three/drei';
 import * as THREE from 'three';
 import gsap from 'gsap';
 import { useGSAP } from '@gsap/react';
 
-// --- 加载进度条组件 ---
 const Loader = () => {
     const { progress } = useProgress();
     return (
         <Html center>
-            <div style={{ color: 'white', whiteSpace: 'nowrap' }}>
+            <div style={{ color: '#00f0ff', whiteSpace: 'nowrap', fontWeight: 'bold' }}>
                 Loading Models... {progress.toFixed(0)}%
             </div>
         </Html>
     );
 };
 
-// --- 子组件：负责循环控制 (直接操作 DOM/Three.js 属性，脱离 React State) ---
 interface SequenceProps {
     urls: string[];
-    fps?: number; // 播放帧率
+    fps?: number;
+    playTrigger: number;         // 1. 新增：接收外部的重播信号
+    onFinished: () => void;      // 2. 新增：播放结束的回调
 }
 
-const SequenceController: React.FC<SequenceProps> = ({ urls, fps = 12 }) => {
-    // 1. 一次性并行加载所有模型序列
-    // @ts-ignore (因为 useGLTF 类型定义有时会报数组错误，但实际完全支持数组)
+const SequenceController: React.FC<SequenceProps> = ({ urls, fps = 12, playTrigger, onFinished }) => {
+    // @ts-ignore
     const gltfs = useGLTF(urls) as any[];
 
     const groupRef = useRef<THREE.Group>(null);
     const clockRef = useRef(0);
     const currentIndexRef = useRef(0);
+    const isFinishedRef = useRef(false);
 
-    // 2. 初始化：让第一个模型显示，其他的隐藏
+    // 当 playTrigger 改变（用户点击重播）或模型更新时，重置播放状态
     useEffect(() => {
-        if (groupRef.current) {
+        if (groupRef.current && gltfs.length > 0) {
+            currentIndexRef.current = 0;
+            clockRef.current = 0;
+            isFinishedRef.current = false;
+
+            // 隐藏所有帧，仅显示第一帧
             groupRef.current.children.forEach((child, index) => {
                 child.visible = index === 0;
             });
         }
-    }, [gltfs]);
+    }, [playTrigger, gltfs]);
 
-    // 3. 高性能动画循环 (不触发组件 re-render)
+    // 高性能帧渲染循环
     useFrame((_, delta) => {
-        if (!groupRef.current || gltfs.length === 0) return;
+        if (!groupRef.current || gltfs.length === 0 || isFinishedRef.current) return;
 
         clockRef.current += delta;
 
-        // 如果累计的时间超过了 1 帧所需的时间
+        // 当经过的时间大于一帧所需时间时
         if (clockRef.current > 1 / fps) {
+            // 如果已经到了最后一帧
+            if (currentIndexRef.current >= gltfs.length - 1) {
+                isFinishedRef.current = true;
+                onFinished(); // 告诉父组件播放完毕，显示重播按钮
+                return;
+            }
+
             const children = groupRef.current.children;
 
             // 隐藏当前帧
@@ -56,15 +68,15 @@ const SequenceController: React.FC<SequenceProps> = ({ urls, fps = 12 }) => {
                 children[currentIndexRef.current].visible = false;
             }
 
-            // 计算下一帧的索引
-            currentIndexRef.current = (currentIndexRef.current + 1) % gltfs.length;
+            // 索引 +1，不再循环
+            currentIndexRef.current++;
 
             // 显示下一帧
             if (children[currentIndexRef.current]) {
                 children[currentIndexRef.current].visible = true;
             }
 
-            // 减去一帧的时间，保证动画平滑不丢失精度
+            // 减去时间以保持节奏精准
             clockRef.current -= 1 / fps;
         }
     });
@@ -72,60 +84,77 @@ const SequenceController: React.FC<SequenceProps> = ({ urls, fps = 12 }) => {
     return (
         <group ref={groupRef}>
             {gltfs.map((gltf, index) => (
-                // 默认仅让第一帧可见，后续交由 useFrame 控制
                 <primitive key={urls[index]} object={gltf.scene} visible={index === 0} />
             ))}
         </group>
     );
 };
 
-// 1. 在 Props 里增加 fps (帧率) 属性，用于控制快慢
 interface ModelSequencePlayerProps {
     isStreaming: boolean;
+    isProcessing: boolean;
     glbUrls: string[];
-    fps?: number; // 新增：控制播放速度
+    fps?: number;
 }
 
 const ModelSequencePlayer: React.FC<ModelSequencePlayerProps> = ({
                                                                      isStreaming,
+                                                                     isProcessing,
                                                                      glbUrls,
                                                                      fps = 5
                                                                  }) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const canvasRef = useRef<HTMLDivElement>(null);
 
-    // 预加载所有模型 (即使关闭摄像头，模型依然在内存里，下次打开秒开)
+    // 控制重播的内部状态
+    const [playTrigger, setPlayTrigger] = useState(0);
+    const [isFinished, setIsFinished] = useState(false);
+
+    // 当有了新模型时，预加载并自动重置播放状态，准备第一次播放
     useEffect(() => {
         if (glbUrls.length > 0) {
             useGLTF.preload(glbUrls);
+            setIsFinished(false);
+            setPlayTrigger(prev => prev + 1);
         }
     }, [glbUrls]);
 
-    // 使用 GSAP 每次打开摄像头时重新触发淡入效果
+    // 模型加载完毕时的淡入动画
     useGSAP(() => {
-        if (isStreaming && glbUrls.length > 0 && canvasRef.current) {
+        if (glbUrls.length > 0 && canvasRef.current && !isStreaming) {
             gsap.fromTo(canvasRef.current,
-                { opacity: 0 },
-                { opacity: 1, duration: 1.5, ease: 'power2.out' }
+                { opacity: 0, scale: 0.95 },
+                { opacity: 1, scale: 1, duration: 1.2, ease: 'power2.out' }
             );
         }
-    }, [isStreaming, glbUrls.length]);
+    }, [glbUrls.length, isStreaming]);
+
+    // 点击重播的处理函数
+    const handleReplay = () => {
+        setIsFinished(false);
+        setPlayTrigger(prev => prev + 1);
+    };
 
     return (
         <div className="ai-output-wrapper" ref={containerRef}>
-            <div className="output-3d-container">
+            <div className="output-3d-container" style={{ position: 'relative' }}>
 
-                {/* 修改：当没在推流时，显示提示文案 */}
-                {!isStreaming && (
-                    <div className="empty-state">Camera is off. Translation stopped.</div>
+                {!isStreaming && !isProcessing && glbUrls.length === 0 && (
+                    <div className="empty-state">Waiting for your sign language...</div>
                 )}
 
                 {isStreaming && glbUrls.length === 0 && (
-                    <div className="loading-state">Generating 3D Models...</div>
+                    <div className="empty-state recording-pulse" style={{ color: '#00f0ff'}}>
+                        Recording in progress...
+                    </div>
                 )}
 
-                {/* 核心修改：只有 isStreaming 为 true 且有数据时，才渲染 Canvas */}
-                {isStreaming && glbUrls.length > 0 && (
+                {isProcessing && (
+                    <div className="loading-state">Generating 3D Translation...</div>
+                )}
+
+                {/* 渲染模型 */}
+                {glbUrls.length > 0 && (
                     <div className="canvas-wrapper" ref={canvasRef}>
                         <Canvas camera={{ position: [0, 2, 5], fov: 50 }}>
                             <ambientLight intensity={0.5} />
@@ -133,12 +162,59 @@ const ModelSequencePlayer: React.FC<ModelSequencePlayerProps> = ({
 
                             <Suspense fallback={<Loader />}>
                                 <Stage environment="city" intensity={0.6}>
-                                    <SequenceController urls={glbUrls} fps={fps} />
+                                    <SequenceController
+                                        urls={glbUrls}
+                                        fps={fps}
+                                        playTrigger={playTrigger}
+                                        onFinished={() => setIsFinished(true)}
+                                    />
                                 </Stage>
                             </Suspense>
 
                             <OrbitControls autoRotate={false} />
                         </Canvas>
+
+                        {/* 重播浮窗按钮（仅在播放完成时显示） */}
+                        {isFinished && !isStreaming && (
+                            <button
+                                onClick={handleReplay}
+                                style={{
+                                    position: 'absolute',
+                                    bottom: '30px',
+                                    left: '50%',
+                                    transform: 'translateX(-50%)',
+                                    zIndex: 10,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '8px',
+                                    padding: '10px 24px',
+                                    backgroundColor: 'rgba(0, 240, 255, 0.1)',
+                                    border: '1px solid #00f0ff',
+                                    color: '#00f0ff',
+                                    borderRadius: '30px',
+                                    cursor: 'pointer',
+                                    fontSize: '14px',
+                                    fontWeight: 'bold',
+                                    backdropFilter: 'blur(8px)',
+                                    boxShadow: '0 4px 15px rgba(0, 240, 255, 0.2)',
+                                    transition: 'all 0.3s ease'
+                                }}
+                                onMouseEnter={(e) => {
+                                    e.currentTarget.style.backgroundColor = 'rgba(0, 240, 255, 0.25)';
+                                    e.currentTarget.style.boxShadow = '0 6px 20px rgba(0, 240, 255, 0.4)';
+                                }}
+                                onMouseLeave={(e) => {
+                                    e.currentTarget.style.backgroundColor = 'rgba(0, 240, 255, 0.1)';
+                                    e.currentTarget.style.boxShadow = '0 4px 15px rgba(0, 240, 255, 0.2)';
+                                }}
+                            >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                                    <path d="M3 3v5h5" />
+                                </svg>
+                                REPLAY
+                            </button>
+                        )}
                     </div>
                 )}
 

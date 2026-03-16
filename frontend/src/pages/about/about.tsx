@@ -19,7 +19,7 @@ const aboutData: HistoryNode[] = [
         id: 1,
         year: "1",
         title: "Translate Page",
-        description: "打开摄像头之后，您可以做出手语动作，然后左边部分会反馈以模型的文本输出、置信度和对应的SRHand教学动作",
+        description: "打开摄像头之后，您可以做出手语动作，然后左边部分会反馈以模型的文本输出、置信度和对应的SRHand教学动作，左手为肉色，右手为蓝色",
         imageUrl: "https://picsum.photos/800/600?random=1" // 👈 换成这个
     },
     {
