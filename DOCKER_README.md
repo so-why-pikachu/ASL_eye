@@ -14,7 +14,7 @@ Since everyone has a different MySQL password, we use a `.env` file to manage it
      ```
    - PowerShell:
      ```powershell
-     cp .env.example .env
+     cp  .env
      ```
 
 2. **Edit `.env`**

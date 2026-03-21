@@ -21,10 +21,10 @@ services:
     env_file:
       - .env
     volumes:
-      # Map your host Windows paths directly to the container Linux paths
-      - f:/sign_language/data:/data:ro
-      - f:/sign_language/result:/result:ro
-      - f:/sign_language/result_3d/glb_models:/result_3d:ro
+      # Use relative paths for portability across different servers
+      - ./data:/data:ro
+      - ./result:/result:ro
+      - ./result_3d/glb_models:/result_3d:ro
     environment:
       # Automatically pass in the dynamically generated relative paths for Docker
       - DATA_ROOT=/data
