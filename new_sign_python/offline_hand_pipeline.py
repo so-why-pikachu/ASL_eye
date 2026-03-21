@@ -1,14 +1,11 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
-Offline video -> hand landmarks DB -> 3D rendering video pipeline.
+Offline backend pipeline:
+- Extract per-frame hand landmarks
+- Persist sync timestamps and render metadata into MySQL
+- Optionally export Unity-friendly JSON from DB
 
-This is a Python refactor of the reusable parts from:
-- Test.cs
-- KalmanFilter.cs
-- Vector3KalmanFilter.cs
-- HandLandmarkFilter.cs
-
-It does not modify the original Unity/C# code.
+All code is in new_sign_python.
 """
 
 from __future__ import annotations
@@ -20,21 +17,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import cv2
-import matplotlib
-import numpy as np
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
-
-HAND_CONNECTIONS = [
-    (0, 1), (1, 2), (2, 3), (3, 4),
-    (0, 5), (5, 6), (6, 7), (7, 8),
-    (5, 9), (9, 10), (10, 11), (11, 12),
-    (9, 13), (13, 14), (14, 15), (15, 16),
-    (13, 17), (17, 18), (18, 19), (19, 20),
-    (0, 17),
-]
 
 
 @dataclass
@@ -46,15 +28,6 @@ class HandLandmarkData:
 
 
 @dataclass
-class HandData:
-    hand_index: int
-    hand_type: str
-    bound_area: float
-    hand_gesture: str
-    landmarks: List[HandLandmarkData]
-
-
-@dataclass
 class MySQLConfig:
     host: str
     port: int
@@ -63,103 +36,13 @@ class MySQLConfig:
     database: str
 
 
-class KalmanFilter:
-    def __init__(self, process_noise: float, measurement_noise: float) -> None:
-        self.q = process_noise
-        self.r = measurement_noise
-        self.x = 0.0
-        self.p = 1.0
-        self.k = 0.0
-
-    def update(self, measurement: float) -> float:
-        self.p = self.p + self.q
-        self.k = self.p / (self.p + self.r)
-        self.x = self.x + self.k * (measurement - self.x)
-        self.p = (1.0 - self.k) * self.p
-        return self.x
-
-    def set_state(self, state: float, covariance: float) -> None:
-        self.x = state
-        self.p = covariance
-
-
-class Vector3KalmanFilter:
-    def __init__(self, process_noise: float = 0.008, measurement_noise: float = 0.03) -> None:
-        self.x_filter = KalmanFilter(process_noise, measurement_noise)
-        self.y_filter = KalmanFilter(process_noise, measurement_noise)
-        self.z_filter = KalmanFilter(process_noise, measurement_noise)
-
-    def update(self, measurement: np.ndarray) -> np.ndarray:
-        return np.array(
-            [
-                self.x_filter.update(float(measurement[0])),
-                self.y_filter.update(float(measurement[1])),
-                self.z_filter.update(float(measurement[2])),
-            ],
-            dtype=np.float32,
-        )
-
-    def set_state(self, state: np.ndarray, covariance: float) -> None:
-        self.x_filter.set_state(float(state[0]), covariance)
-        self.y_filter.set_state(float(state[1]), covariance)
-        self.z_filter.set_state(float(state[2]), covariance)
-
-
-class HandLandmarkFilter:
-    LANDMARK_COUNT = 21
-
-    def __init__(self, process_noise: float = 0.008, measurement_noise: float = 0.03) -> None:
-        self.left_filters = [Vector3KalmanFilter(process_noise, measurement_noise) for _ in range(self.LANDMARK_COUNT)]
-        self.right_filters = [Vector3KalmanFilter(process_noise, measurement_noise) for _ in range(self.LANDMARK_COUNT)]
-        self.initialized_left = False
-        self.initialized_right = False
-
-    def filter_left_hand_landmarks(self, left_hand: List[HandLandmarkData], z_scale: float) -> None:
-        self._filter_hand(left_hand, self.left_filters, "left", z_scale)
-
-    def filter_right_hand_landmarks(self, right_hand: List[HandLandmarkData], z_scale: float) -> None:
-        self._filter_hand(right_hand, self.right_filters, "right", z_scale)
-
-    def _filter_hand(
-        self,
-        hand: List[HandLandmarkData],
-        filters: List[Vector3KalmanFilter],
-        hand_side: str,
-        z_scale: float,
-    ) -> None:
-        if hand is None:
-            return
-
-        if len(hand) < self.LANDMARK_COUNT:
-            return
-
-        if hand_side == "left" and not self.initialized_left:
-            for i in range(self.LANDMARK_COUNT):
-                pos = np.array([hand[i].x, hand[i].y, hand[i].z * z_scale], dtype=np.float32)
-                filters[i].set_state(pos, 1.0)
-            self.initialized_left = True
-
-        if hand_side == "right" and not self.initialized_right:
-            for i in range(self.LANDMARK_COUNT):
-                pos = np.array([hand[i].x, hand[i].y, hand[i].z * z_scale], dtype=np.float32)
-                filters[i].set_state(pos, 1.0)
-            self.initialized_right = True
-
-        for i in range(self.LANDMARK_COUNT):
-            raw_pos = np.array([hand[i].x, hand[i].y, hand[i].z * z_scale], dtype=np.float32)
-            filtered = filters[i].update(raw_pos)
-            hand[i].x = float(filtered[0])
-            hand[i].y = float(filtered[1])
-            hand[i].z = float(filtered[2] / z_scale)
-
-
 def get_mysql_connection(cfg: MySQLConfig, with_database: bool = True):
     try:
         import pymysql
     except ImportError as exc:
         raise RuntimeError("pymysql is required: pip install pymysql") from exc
 
-    conn_kwargs = {
+    kwargs = {
         "host": cfg.host,
         "port": cfg.port,
         "user": cfg.user,
@@ -168,41 +51,80 @@ def get_mysql_connection(cfg: MySQLConfig, with_database: bool = True):
         "autocommit": False,
     }
     if with_database:
-        conn_kwargs["database"] = cfg.database
-    return pymysql.connect(**conn_kwargs)
+        kwargs["database"] = cfg.database
+    return pymysql.connect(**kwargs)
 
 
-def init_db(cfg: MySQLConfig):
+def init_db(cfg: MySQLConfig) -> None:
     root_conn = get_mysql_connection(cfg, with_database=False)
     root_cur = root_conn.cursor()
-    root_cur.execute(f"CREATE DATABASE IF NOT EXISTS `{cfg.database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
+    root_cur.execute(
+        f"CREATE DATABASE IF NOT EXISTS `{cfg.database}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+    )
+    root_conn.commit()
     root_cur.close()
     root_conn.close()
 
     conn = get_mysql_connection(cfg, with_database=True)
     cur = conn.cursor()
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS video_meta (
+            video_id VARCHAR(255) PRIMARY KEY,
+            video_path TEXT NOT NULL,
+            fps DOUBLE NOT NULL,
+            total_frames INT NOT NULL,
+            duration_ms BIGINT NOT NULL,
+            frame_interval_ms DOUBLE NOT NULL,
+            sync_source VARCHAR(32) NOT NULL,
+            z_scale DOUBLE NOT NULL,
+            xy_divisor DOUBLE NOT NULL,
+            y_offset DOUBLE NOT NULL,
+            left_x_offset DOUBLE NOT NULL,
+            right_x_offset DOUBLE NOT NULL,
+            left_model_path TEXT,
+            right_model_path TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS video_frames (
+            video_id VARCHAR(255) NOT NULL,
+            frame_index INT NOT NULL,
+            timestamp_ms BIGINT NOT NULL,
+            frame_time_sec DOUBLE NOT NULL,
+            PRIMARY KEY(video_id, frame_index),
+            INDEX idx_video_time(video_id, timestamp_ms)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        """
+    )
+
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS hand_landmarks (
             id BIGINT PRIMARY KEY AUTO_INCREMENT,
             video_id VARCHAR(255) NOT NULL,
             frame_index INT NOT NULL,
-            timestamp_ms INT NOT NULL,
+            timestamp_ms BIGINT NOT NULL,
             hand_type VARCHAR(16) NOT NULL,
             hand_index INT NOT NULL,
             bound_area DOUBLE NOT NULL,
             hand_gesture VARCHAR(64) NOT NULL,
-            landmarks_json LONGTEXT NOT NULL
-        );
+            landmarks_json LONGTEXT NOT NULL,
+            INDEX idx_video_frame(video_id, frame_index),
+            INDEX idx_video_time(video_id, timestamp_ms)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
         """
     )
-    try:
-        cur.execute("CREATE INDEX idx_video_frame ON hand_landmarks(video_id, frame_index);")
-    except Exception:
-        # Index may already exist.
-        pass
+
     conn.commit()
-    return conn
+    cur.close()
+    conn.close()
 
 
 def compute_bound_area(landmarks: List[HandLandmarkData]) -> float:
@@ -213,7 +135,89 @@ def compute_bound_area(landmarks: List[HandLandmarkData]) -> float:
     return float((max(xs) - min(xs)) * (max(ys) - min(ys)))
 
 
-def extract_to_db(video_path: Path, mysql_cfg: MySQLConfig, video_id: str, max_hands: int = 2) -> None:
+def upsert_video_meta(
+    conn,
+    video_id: str,
+    video_path: Path,
+    fps: float,
+    total_frames: int,
+    duration_ms: int,
+    frame_interval_ms: float,
+    sync_source: str,
+    z_scale: float,
+    xy_divisor: float,
+    y_offset: float,
+    left_x_offset: float,
+    right_x_offset: float,
+    left_model_path: Optional[Path],
+    right_model_path: Optional[Path],
+) -> None:
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO video_meta(
+            video_id, video_path, fps, total_frames, duration_ms, frame_interval_ms,
+            sync_source, z_scale, xy_divisor, y_offset, left_x_offset, right_x_offset,
+            left_model_path, right_model_path
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+            video_path=VALUES(video_path),
+            fps=VALUES(fps),
+            total_frames=VALUES(total_frames),
+            duration_ms=VALUES(duration_ms),
+            frame_interval_ms=VALUES(frame_interval_ms),
+            sync_source=VALUES(sync_source),
+            z_scale=VALUES(z_scale),
+            xy_divisor=VALUES(xy_divisor),
+            y_offset=VALUES(y_offset),
+            left_x_offset=VALUES(left_x_offset),
+            right_x_offset=VALUES(right_x_offset),
+            left_model_path=VALUES(left_model_path),
+            right_model_path=VALUES(right_model_path)
+        """,
+        (
+            video_id,
+            str(video_path),
+            float(fps),
+            int(total_frames),
+            int(duration_ms),
+            float(frame_interval_ms),
+            sync_source,
+            float(z_scale),
+            float(xy_divisor),
+            float(y_offset),
+            float(left_x_offset),
+            float(right_x_offset),
+            str(left_model_path) if left_model_path else None,
+            str(right_model_path) if right_model_path else None,
+        ),
+    )
+    conn.commit()
+    cur.close()
+
+
+def clear_video_rows(conn, video_id: str) -> None:
+    cur = conn.cursor()
+    cur.execute("DELETE FROM hand_landmarks WHERE video_id=%s", (video_id,))
+    cur.execute("DELETE FROM video_frames WHERE video_id=%s", (video_id,))
+    conn.commit()
+    cur.close()
+
+
+def extract_to_db(
+    video_path: Path,
+    mysql_cfg: MySQLConfig,
+    video_id: str,
+    max_hands: int,
+    sync_source: str,
+    z_scale: float,
+    xy_divisor: float,
+    y_offset: float,
+    left_x_offset: float,
+    right_x_offset: float,
+    left_model_path: Optional[Path],
+    right_model_path: Optional[Path],
+) -> None:
     try:
         import mediapipe as mp
     except ImportError as exc:
@@ -223,10 +227,13 @@ def extract_to_db(video_path: Path, mysql_cfg: MySQLConfig, video_id: str, max_h
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open video: {video_path}")
 
-    conn = init_db(mysql_cfg)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM hand_landmarks WHERE video_id = %s", (video_id,))
-    conn.commit()
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if not fps or fps <= 0:
+        fps = 30.0
+
+    init_db(mysql_cfg)
+    conn = get_mysql_connection(mysql_cfg, with_database=True)
+    clear_video_rows(conn, video_id)
 
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(
@@ -236,14 +243,31 @@ def extract_to_db(video_path: Path, mysql_cfg: MySQLConfig, video_id: str, max_h
         min_tracking_confidence=0.5,
     )
 
+    frame_cur = conn.cursor()
+    hand_cur = conn.cursor()
+
     frame_index = 0
-    total_written = 0
+    total_hand_rows = 0
+    last_ts = 0
+
     while True:
         ok, frame = cap.read()
         if not ok:
             break
 
         timestamp_ms = int(cap.get(cv2.CAP_PROP_POS_MSEC))
+        if timestamp_ms <= 0:
+            timestamp_ms = int(round(frame_index * 1000.0 / fps))
+        last_ts = timestamp_ms
+
+        frame_cur.execute(
+            """
+            INSERT INTO video_frames(video_id, frame_index, timestamp_ms, frame_time_sec)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (video_id, frame_index, timestamp_ms, frame_index / fps),
+        )
+
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = hands.process(rgb)
 
@@ -252,23 +276,17 @@ def extract_to_db(video_path: Path, mysql_cfg: MySQLConfig, video_id: str, max_h
                 zip(result.multi_hand_landmarks, result.multi_handedness)
             ):
                 hand_type = handedness.classification[0].label
-
                 landmarks: List[HandLandmarkData] = []
                 for i, lm in enumerate(hand_lms.landmark):
                     landmarks.append(
-                        HandLandmarkData(
-                            id=i,
-                            x=float(lm.x),
-                            y=float(lm.y),
-                            z=float(lm.z),
-                        )
+                        HandLandmarkData(id=i, x=float(lm.x), y=float(lm.y), z=float(lm.z))
                     )
 
                 bound_area = compute_bound_area(landmarks)
                 hand_gesture = "unknown"
                 landmarks_json = json.dumps([p.__dict__ for p in landmarks], ensure_ascii=False)
 
-                cur.execute(
+                hand_cur.execute(
                     """
                     INSERT INTO hand_landmarks(
                         video_id, frame_index, timestamp_ms, hand_type, hand_index,
@@ -286,197 +304,232 @@ def extract_to_db(video_path: Path, mysql_cfg: MySQLConfig, video_id: str, max_h
                         landmarks_json,
                     ),
                 )
-                total_written += 1
+                total_hand_rows += 1
 
         if frame_index % 200 == 0:
             conn.commit()
         frame_index += 1
 
     conn.commit()
+
+    upsert_video_meta(
+        conn=conn,
+        video_id=video_id,
+        video_path=video_path,
+        fps=fps,
+        total_frames=frame_index,
+        duration_ms=last_ts,
+        frame_interval_ms=(1000.0 / fps),
+        sync_source=sync_source,
+        z_scale=z_scale,
+        xy_divisor=xy_divisor,
+        y_offset=y_offset,
+        left_x_offset=left_x_offset,
+        right_x_offset=right_x_offset,
+        left_model_path=left_model_path,
+        right_model_path=right_model_path,
+    )
+
+    frame_cur.close()
+    hand_cur.close()
     conn.close()
     hands.close()
     cap.release()
-    print(f"[extract] frames={frame_index}, rows={total_written}, video_id={video_id}")
+
+    print(
+        f"[extract] video_id={video_id}, total_frames={frame_index}, "
+        f"frame_rows={frame_index}, hand_rows={total_hand_rows}, duration_ms={last_ts}"
+    )
 
 
-def load_frame_data(mysql_cfg: MySQLConfig, video_id: str) -> Dict[int, List[HandData]]:
+def export_unity_json(mysql_cfg: MySQLConfig, video_id: str, output_json: Path) -> None:
     conn = get_mysql_connection(mysql_cfg, with_database=True)
+
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT frame_index, hand_index, hand_type, bound_area, hand_gesture, landmarks_json
-        FROM hand_landmarks
+        SELECT video_id, video_path, fps, total_frames, duration_ms, frame_interval_ms,
+               sync_source, z_scale, xy_divisor, y_offset, left_x_offset, right_x_offset,
+               left_model_path, right_model_path
+        FROM video_meta
         WHERE video_id = %s
+        """,
+        (video_id,),
+    )
+    meta_row = cur.fetchone()
+    if not meta_row:
+        raise RuntimeError(f"video_id not found in video_meta: {video_id}")
+
+    meta = {
+        "video_id": meta_row[0],
+        "video_path": meta_row[1],
+        "fps": float(meta_row[2]),
+        "total_frames": int(meta_row[3]),
+        "duration_ms": int(meta_row[4]),
+        "frame_interval_ms": float(meta_row[5]),
+        "sync_source": meta_row[6],
+        "render_params": {
+            "z_scale": float(meta_row[7]),
+            "xy_divisor": float(meta_row[8]),
+            "y_offset": float(meta_row[9]),
+            "left_x_offset": float(meta_row[10]),
+            "right_x_offset": float(meta_row[11]),
+        },
+        "base_models": {
+            "left_hand": meta_row[12],
+            "right_hand": meta_row[13],
+        },
+    }
+
+    cur.execute(
+        """
+        SELECT frame_index, timestamp_ms, frame_time_sec
+        FROM video_frames
+        WHERE video_id=%s
+        ORDER BY frame_index ASC
+        """,
+        (video_id,),
+    )
+    frames: Dict[int, Dict] = {}
+    for frame_index, timestamp_ms, frame_time_sec in cur.fetchall():
+        frames[int(frame_index)] = {
+            "frame_index": int(frame_index),
+            "timestamp_ms": int(timestamp_ms),
+            "frame_time_sec": float(frame_time_sec),
+            "hands": [],
+        }
+
+    cur.execute(
+        """
+        SELECT frame_index, timestamp_ms, hand_type, hand_index, bound_area, hand_gesture, landmarks_json
+        FROM hand_landmarks
+        WHERE video_id=%s
         ORDER BY frame_index ASC, hand_index ASC
         """,
         (video_id,),
     )
 
-    frame_data: Dict[int, List[HandData]] = {}
-    for frame_index, hand_index, hand_type, bound_area, hand_gesture, landmarks_json in cur.fetchall():
-        landmarks_raw = json.loads(landmarks_json)
-        landmarks = [
-            HandLandmarkData(
-                id=int(p["id"]),
-                x=float(p["x"]),
-                y=float(p["y"]),
-                z=float(p["z"]),
-            )
-            for p in landmarks_raw
-        ]
-        hand = HandData(
-            hand_index=int(hand_index),
-            hand_type=str(hand_type),
-            bound_area=float(bound_area),
-            hand_gesture=str(hand_gesture),
-            landmarks=landmarks,
+    for frame_index, timestamp_ms, hand_type, hand_index, bound_area, hand_gesture, landmarks_json in cur.fetchall():
+        frame = frames.get(int(frame_index))
+        if frame is None:
+            continue
+        frame["hands"].append(
+            {
+                "timestamp_ms": int(timestamp_ms),
+                "hand_type": str(hand_type),
+                "hand_index": int(hand_index),
+                "bound_area": float(bound_area),
+                "hand_gesture": str(hand_gesture),
+                "landmarks": json.loads(landmarks_json),
+            }
         )
-        frame_data.setdefault(int(frame_index), []).append(hand)
+
+    payload = {
+        "meta": meta,
+        "frames": [frames[idx] for idx in sorted(frames.keys())],
+    }
+
+    output_json.parent.mkdir(parents=True, exist_ok=True)
+    output_json.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
     conn.close()
-    return frame_data
+    print(f"[export] video_id={video_id}, frames={len(payload['frames'])}, out={output_json}")
 
 
-def render_3d_panel(
-    hands: List[HandData],
-    landmark_filter: Optional[HandLandmarkFilter],
-    z_scale: float,
-    xy_divisor: float,
-    y_offset: float,
-    left_x_offset: float,
-    right_x_offset: float,
-    fig: plt.Figure,
-    ax: plt.Axes,
-) -> np.ndarray:
-    ax.clear()
-    ax.set_title("Offline 3D Hand Render")
-    ax.set_xlim(-1.0, 1.0)
-    ax.set_ylim(-1.0, 1.0)
-    ax.set_zlim(-2.0, 2.0)
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
-    ax.set_zlabel("Z")
-    ax.view_init(elev=20, azim=-60)
+def export_unity_gesture_stream(mysql_cfg: MySQLConfig, video_id: str, output_jsonl: Path) -> None:
+    """
+    Export per-frame GestureData packets compatible with Unity Test.cs expectation:
+    {
+      "hand_count": N,
+      "hands": [...]
+    }
+    One JSON object per line (JSONL), ordered by frame_index.
+    """
+    conn = get_mysql_connection(mysql_cfg, with_database=True)
+    cur = conn.cursor()
 
-    for hand in hands:
-        if hand.hand_type == "Left":
-            if landmark_filter is not None:
-                landmark_filter.filter_left_hand_landmarks(hand.landmarks, z_scale=z_scale)
-            color = "#2ca02c"
-            x_offset = left_x_offset
-        else:
-            if landmark_filter is not None:
-                landmark_filter.filter_right_hand_landmarks(hand.landmarks, z_scale=z_scale)
-            color = "#d62728"
-            x_offset = right_x_offset
-
-        points = np.zeros((len(hand.landmarks), 3), dtype=np.float32)
-        for i, p in enumerate(hand.landmarks):
-            points[i, 0] = p.x / xy_divisor + x_offset
-            points[i, 1] = -p.y / xy_divisor - y_offset
-            points[i, 2] = p.z * z_scale
-
-        ax.scatter(points[:, 0], points[:, 1], points[:, 2], c=color, s=16)
-        for a, b in HAND_CONNECTIONS:
-            ax.plot(
-                [points[a, 0], points[b, 0]],
-                [points[a, 1], points[b, 1]],
-                [points[a, 2], points[b, 2]],
-                color=color,
-                linewidth=2.0,
-            )
-
-    fig.canvas.draw()
-    w, h = fig.canvas.get_width_height()
-    rgba = np.frombuffer(fig.canvas.buffer_rgba(), dtype=np.uint8).reshape(h, w, 4)
-    return cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
-
-
-def render_video(
-    video_path: Path,
-    mysql_cfg: MySQLConfig,
-    video_id: str,
-    output_path: Path,
-    z_scale: float = 8.0,
-    xy_divisor: float = 1.5,
-    y_offset: float = 0.3,
-    left_x_offset: float = -0.15,
-    right_x_offset: float = 0.15,
-    use_kalman: bool = True,
-    left_hand_model: Optional[Path] = None,
-    right_hand_model: Optional[Path] = None,
-    sphere_prefab: Optional[Path] = None,
-) -> None:
-    frame_data = load_frame_data(mysql_cfg, video_id)
-    cap = cv2.VideoCapture(str(video_path))
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open video: {video_path}")
-
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    if not fps or fps <= 0:
-        fps = 30.0
-
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    out_width = width * 2
-    out_height = height
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    writer = cv2.VideoWriter(
-        str(output_path),
-        cv2.VideoWriter_fourcc(*"mp4v"),
-        fps,
-        (out_width, out_height),
+    cur.execute(
+        """
+        SELECT frame_index
+        FROM video_frames
+        WHERE video_id=%s
+        ORDER BY frame_index ASC
+        """,
+        (video_id,),
     )
-    if not writer.isOpened():
-        raise RuntimeError(f"Cannot create output video: {output_path}")
+    frame_indexes = [int(row[0]) for row in cur.fetchall()]
 
-    fig = plt.figure(figsize=(width / 100.0, height / 100.0), dpi=100)
-    ax = fig.add_subplot(111, projection="3d")
-    fig.tight_layout(pad=0.2)
+    cur.execute(
+        """
+        SELECT frame_index, hand_type, hand_index, bound_area, hand_gesture, landmarks_json
+        FROM hand_landmarks
+        WHERE video_id=%s
+        ORDER BY frame_index ASC, hand_index ASC
+        """,
+        (video_id,),
+    )
 
-    filter_obj = HandLandmarkFilter(0.008, 0.03) if use_kalman else None
-
-    if left_hand_model and not left_hand_model.exists():
-        print(f"[warn] LeftHand.fbx not found: {left_hand_model}")
-    if right_hand_model and not right_hand_model.exists():
-        print(f"[warn] RightHand.fbx not found: {right_hand_model}")
-    if sphere_prefab and not sphere_prefab.exists():
-        print(f"[warn] Sphere.prefab not found: {sphere_prefab}")
-
-    frame_index = 0
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-
-        hands = frame_data.get(frame_index, [])
-        panel = render_3d_panel(
-            hands=hands,
-            landmark_filter=filter_obj,
-            z_scale=z_scale,
-            xy_divisor=xy_divisor,
-            y_offset=y_offset,
-            left_x_offset=left_x_offset,
-            right_x_offset=right_x_offset,
-            fig=fig,
-            ax=ax,
+    hands_by_frame: Dict[int, List[Dict]] = {}
+    for frame_index, hand_type, hand_index, bound_area, hand_gesture, landmarks_json in cur.fetchall():
+        hands_by_frame.setdefault(int(frame_index), []).append(
+            {
+                "hand_index": int(hand_index),
+                "hand_type": str(hand_type),
+                "bound_area": float(bound_area),
+                "hand_gesture": str(hand_gesture),
+                "landmarks": json.loads(landmarks_json),
+            }
         )
-        panel = cv2.resize(panel, (width, height), interpolation=cv2.INTER_AREA)
-        combined = np.hstack([frame, panel])
-        writer.write(combined)
-        frame_index += 1
 
-    cap.release()
-    writer.release()
-    plt.close(fig)
-    print(f"[render] frames={frame_index}, out={output_path}")
+    output_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    with output_jsonl.open("w", encoding="utf-8") as f:
+        for idx in frame_indexes:
+            hands = hands_by_frame.get(idx, [])
+            pkt = {
+                "hand_count": len(hands),
+                "hands": hands,
+            }
+            f.write(json.dumps(pkt, ensure_ascii=False) + "\n")
+
+    cur.close()
+    conn.close()
+    print(f"[export-gesture-stream] video_id={video_id}, frames={len(frame_indexes)}, out={output_jsonl}")
 
 
-def run_pipeline(args: argparse.Namespace) -> None:
-    video_path = Path(args.video).resolve()
-    output_path = Path(args.output).resolve()
-    video_id = args.video_id or video_path.stem
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Backend-only hand timestamp tagging pipeline (MySQL)."
+    )
+    parser.add_argument("--mode", choices=["extract", "export-json", "export-gesture-stream"], default="extract")
+    parser.add_argument("--video", help="Input video path for extract mode")
+    parser.add_argument("--video-id", default=None, help="Video id; default uses input video stem")
+    parser.add_argument("--max-hands", type=int, default=2)
+
+    parser.add_argument("--mysql-host", default="127.0.0.1")
+    parser.add_argument("--mysql-port", type=int, default=3306)
+    parser.add_argument("--mysql-user", default="root")
+    parser.add_argument("--mysql-password", default="")
+    parser.add_argument("--mysql-database", default="sign_language")
+
+    parser.add_argument("--sync-source", default="video_frame_time")
+
+    parser.add_argument("--z-scale", type=float, default=8.0)
+    parser.add_argument("--xy-divisor", type=float, default=1.5)
+    parser.add_argument("--y-offset", type=float, default=0.3)
+    parser.add_argument("--left-x-offset", type=float, default=-0.15)
+    parser.add_argument("--right-x-offset", type=float, default=0.15)
+
+    parser.add_argument("--left-hand-model", default=None)
+    parser.add_argument("--right-hand-model", default=None)
+
+    parser.add_argument("--output-json", default="new_sign_python/unity_playback_data.json")
+    parser.add_argument("--output-jsonl", default="new_sign_python/unity_gesture_stream.jsonl")
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+
     mysql_cfg = MySQLConfig(
         host=args.mysql_host,
         port=args.mysql_port,
@@ -485,55 +538,43 @@ def run_pipeline(args: argparse.Namespace) -> None:
         database=args.mysql_database,
     )
 
-    if args.mode in ("extract", "pipeline"):
-        extract_to_db(video_path, mysql_cfg, video_id, max_hands=args.max_hands)
+    if args.mode == "extract":
+        if not args.video:
+            raise RuntimeError("--video is required in extract mode")
 
-    if args.mode in ("render", "pipeline"):
-        render_video(
+        video_path = Path(args.video).resolve()
+        video_id = args.video_id or video_path.stem
+
+        extract_to_db(
             video_path=video_path,
             mysql_cfg=mysql_cfg,
             video_id=video_id,
-            output_path=output_path,
+            max_hands=args.max_hands,
+            sync_source=args.sync_source,
             z_scale=args.z_scale,
             xy_divisor=args.xy_divisor,
             y_offset=args.y_offset,
             left_x_offset=args.left_x_offset,
             right_x_offset=args.right_x_offset,
-            use_kalman=not args.disable_kalman,
-            left_hand_model=Path(args.left_hand_model).resolve() if args.left_hand_model else None,
-            right_hand_model=Path(args.right_hand_model).resolve() if args.right_hand_model else None,
-            sphere_prefab=Path(args.sphere_prefab).resolve() if args.sphere_prefab else None,
+            left_model_path=Path(args.left_hand_model).resolve() if args.left_hand_model else None,
+            right_model_path=Path(args.right_hand_model).resolve() if args.right_hand_model else None,
         )
+        return
 
+    if args.mode == "export-json":
+        if not args.video_id:
+            raise RuntimeError("--video-id is required in export-json mode")
+        output_json = Path(args.output_json).resolve()
+        export_unity_json(mysql_cfg=mysql_cfg, video_id=args.video_id, output_json=output_json)
+        return
 
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Offline video hand processing and 3D render pipeline."
-    )
-    parser.add_argument("--mode", choices=["extract", "render", "pipeline"], default="pipeline")
-    parser.add_argument("--video", required=True, help="Input video path")
-    parser.add_argument("--output", default="offline_render.mp4", help="Rendered output video path")
-    parser.add_argument("--video-id", default=None, help="Video id in database; default uses input video stem")
-    parser.add_argument("--max-hands", type=int, default=2)
-    parser.add_argument("--mysql-host", default="127.0.0.1")
-    parser.add_argument("--mysql-port", type=int, default=3306)
-    parser.add_argument("--mysql-user", default="root")
-    parser.add_argument("--mysql-password", default="")
-    parser.add_argument("--mysql-database", default="sign_language")
-
-    parser.add_argument("--z-scale", type=float, default=8.0, help="Depth scale (Test.cs used *4, here default is *8)")
-    parser.add_argument("--xy-divisor", type=float, default=1.5, help="X/Y scale divisor")
-    parser.add_argument("--y-offset", type=float, default=0.3)
-    parser.add_argument("--left-x-offset", type=float, default=-0.15)
-    parser.add_argument("--right-x-offset", type=float, default=0.15)
-    parser.add_argument("--disable-kalman", action="store_true")
-
-    parser.add_argument("--left-hand-model", default=None, help="LeftHand.fbx path (asset check)")
-    parser.add_argument("--right-hand-model", default=None, help="RightHand.fbx path (asset check)")
-    parser.add_argument("--sphere-prefab", default=None, help="Sphere.prefab path (asset check)")
-    return parser
+    if args.mode == "export-gesture-stream":
+        if not args.video_id:
+            raise RuntimeError("--video-id is required in export-gesture-stream mode")
+        output_jsonl = Path(args.output_jsonl).resolve()
+        export_unity_gesture_stream(mysql_cfg=mysql_cfg, video_id=args.video_id, output_jsonl=output_jsonl)
+        return
 
 
 if __name__ == "__main__":
-    args = build_parser().parse_args()
-    run_pipeline(args)
+    main()

@@ -1,5 +1,3 @@
 opencv-python
-numpy
-matplotlib
 mediapipe
 pymysql
