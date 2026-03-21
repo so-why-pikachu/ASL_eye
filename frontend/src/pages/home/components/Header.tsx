@@ -11,6 +11,7 @@ const Header: React.FC = () => {
         { name: 'Translate', path: '/translate' },
         { name: 'Learning', path: '/learning' },
         { name: 'Contacts', path: '/contacts' },
+        { name: 'Search', path: '/search' },
     ];
 
     const handleClick = (

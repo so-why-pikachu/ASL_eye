@@ -105,6 +105,11 @@ button:focus-visible {
     min-height: 100vh;
 }
 
+.bg-blue {
+    background: linear-gradient(90deg, #8B5CF6, #1E3A8A);
+    min-height: 100vh;
+}
+
 .bg-home::after{
     content: '';
     position: absolute;
