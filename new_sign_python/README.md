@@ -100,3 +100,40 @@ conda run -n voice_to_gemini python new_sign_python/panda3d_skin_mesh_viewer.py 
 ```
 
 This mode is designed for more detailed visual quality and supports 360 orbit + zoom.
+
+## Panda3D FBX Skinning Viewer (true model-driven)
+
+Uses your real hand models:
+- `new_sign_language/LeftHand.fbx`
+- `new_sign_language/RightHand.fbx`
+
+and drives FBX skeleton joints from landmark stream:
+
+```powershell
+conda run -n voice_to_gemini python new_sign_python/panda3d_fbx_skinning_viewer.py `
+  --stream "F:\sign_language\new_sign_python\unity_gesture_stream_0000197996356050556-CELERY.jsonl" `
+  --left-fbx "F:\sign_language\new_sign_language\LeftHand.fbx" `
+  --right-fbx "F:\sign_language\new_sign_language\RightHand.fbx" `
+  --pos-smooth 0.72 `
+  --rot-smooth 0.82 `
+  --wrist-stability 0.65 `
+  --offset-config "F:\sign_language\new_sign_python\fbx_bone_offsets.example.json"
+```
+
+Quality tuning:
+- Increase `--rot-smooth` (e.g. `0.88`) to reduce finger jitter.
+- Increase `--pos-smooth` (e.g. `0.80`) for steadier hand root motion.
+- Increase `--wrist-stability` (e.g. `0.75`) to suppress palm/wrist wobble.
+- Use `--offset-config` to fine tune per-bone HPR offsets for best realism.
+
+Auto-calibrate offsets from your stream:
+
+```powershell
+conda run -n voice_to_gemini python new_sign_python/panda3d_fbx_skinning_viewer.py `
+  --stream "F:\sign_language\new_sign_python\unity_gesture_stream_0000197996356050556-CELERY.jsonl" `
+  --left-fbx "F:\sign_language\new_sign_language\LeftHand.fbx" `
+  --right-fbx "F:\sign_language\new_sign_language\RightHand.fbx" `
+  --calibrate-output "F:\sign_language\new_sign_python\fbx_bone_offsets.auto.json" `
+  --calibrate-max-frames 600 `
+  --calibrate-strength 0.45
+```

@@ -1,0 +1,156 @@
+{
+  "left": {
+    "L_Wrist": [
+      -5.255,
+      68.558,
+      -171.998
+    ],
+    "L_ThumbMetacarpal": [
+      121.578,
+      -21.037,
+      -50.158
+    ],
+    "L_ThumbProximal": [
+      7.323,
+      64.867,
+      -179.598
+    ],
+    "L_IndexMetacarpal": [
+      67.403,
+      3.247,
+      56.497
+    ],
+    "L_IndexProximal": [
+      123.569,
+      43.791,
+      -114.668
+    ],
+    "L_IndexIntermediate": [
+      162.479,
+      74.25,
+      -160.988
+    ],
+    "L_MiddleMetacarpal": [
+      63.338,
+      -20.932,
+      68.359
+    ],
+    "L_MiddleProximal": [
+      -153.439,
+      47.377,
+      140.874
+    ],
+    "L_MiddleIntermediate": [
+      165.579,
+      65.621,
+      -163.682
+    ],
+    "L_RingMetacarpal": [
+      -75.826,
+      17.2,
+      -61.086
+    ],
+    "L_RingProximal": [
+      -111.71,
+      68.354,
+      111.124
+    ],
+    "L_RingIntermediate": [
+      175.691,
+      54.753,
+      -174.021
+    ],
+    "L_LittleMetacarpal": [
+      -92.259,
+      23.257,
+      -7.834
+    ],
+    "L_LittleProximal": [
+      71.283,
+      69.177,
+      -65.854
+    ],
+    "L_LittleIntermediate": [
+      -176.46,
+      48.1,
+      -177.333
+    ]
+  },
+  "right": {
+    "R_Wrist": [
+      5.255,
+      68.558,
+      171.998
+    ],
+    "R_ThumbMetacarpal": [
+      -120.388,
+      -29.864,
+      60.335
+    ],
+    "R_ThumbProximal": [
+      19.401,
+      21.188,
+      2.492
+    ],
+    "R_IndexMetacarpal": [
+      -67.403,
+      3.247,
+      -56.497
+    ],
+    "R_IndexProximal": [
+      -123.568,
+      43.791,
+      114.667
+    ],
+    "R_IndexIntermediate": [
+      -162.484,
+      74.25,
+      160.994
+    ],
+    "R_MiddleMetacarpal": [
+      -63.338,
+      -20.932,
+      -68.359
+    ],
+    "R_MiddleProximal": [
+      153.439,
+      47.377,
+      -140.874
+    ],
+    "R_MiddleIntermediate": [
+      -165.579,
+      65.621,
+      163.682
+    ],
+    "R_RingMetacarpal": [
+      75.826,
+      17.2,
+      61.086
+    ],
+    "R_RingProximal": [
+      111.71,
+      68.354,
+      -111.124
+    ],
+    "R_RingIntermediate": [
+      -175.691,
+      54.753,
+      174.021
+    ],
+    "R_LittleMetacarpal": [
+      92.259,
+      23.257,
+      7.834
+    ],
+    "R_LittleProximal": [
+      -71.283,
+      69.177,
+      65.854
+    ],
+    "R_LittleIntermediate": [
+      176.46,
+      48.1,
+      177.333
+    ]
+  }
+}
