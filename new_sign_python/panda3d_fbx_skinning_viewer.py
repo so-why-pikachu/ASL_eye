@@ -1,4 +1,3 @@
-```python
 #!/usr/bin/env python3
 """
 Axis-aware FBX skinning-driven Panda3D hand viewer.
