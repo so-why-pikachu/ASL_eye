@@ -6,131 +6,131 @@ import '../../styles/translate.css';
 const API_BASE_URL = '';
 
 export default function Translate() {
-    const [ isStreaming, setIsStreaming ] = useState( false );
-    const [ isProcessing, setIsProcessing ] = useState( false );
-    const [ statusText, setStatusText ] = useState( "Camera is off. Ready to start." );
-    const [ translatedText, setTranslatedText ] = useState( "" );
-    const [ confidence, setConfidence ] = useState( 0 );
+    const [isStreaming, setIsStreaming] = useState(false);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [statusText, setStatusText] = useState("Camera is off. Ready to start.");
+    const [translatedText, setTranslatedText] = useState("");
+    const [confidence, setConfidence] = useState(0);
 
-    const [ glbFrames, setGlbFrames ] = useState<string[]>( [] );
+    const [glbFrames, setGlbFrames] = useState<string[]>([]);
 
     // 🔥 新增：控制播放帧率的 State，默认 5 帧/秒
-    const [ playbackFps, setPlaybackFps ] = useState<number>( 5 );
+    const [playbackFps, setPlaybackFps] = useState<number>(5);
 
-    const [ searchWord, setSearchWord ] = useState( "" );
+    const [searchWord, setSearchWord] = useState("");
 
-    const webcamRef = useRef<Webcam>( null );
-    const mediaRecorderRef = useRef<MediaRecorder | null>( null );
-    const chunksRef = useRef<BlobPart[]>( [] );
+    const webcamRef = useRef<Webcam>(null);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const chunksRef = useRef<BlobPart[]>([]);
 
-    const processAndFetchModel = async ( videoBlob: Blob ) => {
-        setIsProcessing( true );
-        setStatusText( "Translating video..." );
+    const processAndFetchModel = async (videoBlob: Blob) => {
+        setIsProcessing(true);
+        setStatusText("Translating video...");
 
         const formData = new FormData();
-        formData.append( 'video', videoBlob, 'sign_clip.webm' );
+        formData.append('video', videoBlob, 'sign_clip.webm');
 
         try {
-            const predictResponse = await fetch( `${API_BASE_URL}/api/sign/predict`, {
+            const predictResponse = await fetch(`${API_BASE_URL}/api/sign/predict`, {
                 method: 'POST',
                 body: formData,
-            } );
+            });
             const predictResult = await predictResponse.json();
 
-            if ( predictResult.code === 200 ) {
+            if (predictResult.code === 200) {
                 const wordName = predictResult.data.word_name;
-                setTranslatedText( wordName );
-                setConfidence( Math.round( predictResult.data.confidence * 100 ) );
-                setStatusText( `Fetching 3D model for "${wordName}"...` );
+                setTranslatedText(wordName);
+                setConfidence(Math.round(predictResult.data.confidence * 100));
+                setStatusText(`Fetching 3D model for "${wordName}"...`);
 
-                const downloadsResponse = await fetch( `${API_BASE_URL}/api/sign/downloads?name=${wordName}` );
+                const downloadsResponse = await fetch(`${API_BASE_URL}/api/sign/downloads?name=${wordName}`);
                 const downloadsResult = await downloadsResponse.json();
 
-                if ( downloadsResult.code === 200 && downloadsResult.data.urls.length > 0 ) {
-                    setGlbFrames( downloadsResult.data.urls );
-                    setStatusText( "Playback ready." );
+                if (downloadsResult.code === 200 && downloadsResult.data.urls.length > 0) {
+                    setGlbFrames(downloadsResult.data.urls);
+                    setStatusText("Playback ready.");
                 } else {
-                    setStatusText( `No 3D model found for "${wordName}".` );
+                    setStatusText(`No 3D model found for "${wordName}".`);
                 }
             } else {
-                console.warn( "Prediction Error:", predictResult.message );
-                setStatusText( "Translation failed: " + predictResult.message );
+                console.warn("Prediction Error:", predictResult.message);
+                setStatusText("Translation failed: " + predictResult.message);
             }
-        } catch ( error ) {
-            console.error( "API Error:", error );
-            setStatusText( "Network error occurred." );
+        } catch (error) {
+            console.error("API Error:", error);
+            setStatusText("Network error occurred.");
         } finally {
-            setIsProcessing( false );
+            setIsProcessing(false);
         }
     };
 
-    useEffect( () => {
-        if ( isStreaming ) {
-            setGlbFrames( [] );
-            setTranslatedText( "" );
-            setConfidence( 0 );
-            setStatusText( "Camera turning on..." );
+    useEffect(() => {
+        if (isStreaming) {
+            setGlbFrames([]);
+            setTranslatedText("");
+            setConfidence(0);
+            setStatusText("Camera turning on...");
             chunksRef.current = [];
         } else {
-            if ( mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording' ) {
+            if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
                 mediaRecorderRef.current.stop();
-                setStatusText( "Stopping recording..." );
+                setStatusText("Stopping recording...");
             }
         }
-    }, [ isStreaming ] );
+    }, [isStreaming]);
 
-    const handleUserMedia = ( stream: MediaStream ) => {
-        if ( !isStreaming ) return;
+    const handleUserMedia = (stream: MediaStream) => {
+        if (!isStreaming) return;
 
-        setStatusText( "Recording..." );
-        const mimeType = MediaRecorder.isTypeSupported( 'video/webm' ) ? 'video/webm' : 'video/mp4';
-        const mediaRecorder = new MediaRecorder( stream, { mimeType } );
+        setStatusText("Recording...");
+        const mimeType = MediaRecorder.isTypeSupported('video/webm') ? 'video/webm' : 'video/mp4';
+        const mediaRecorder = new MediaRecorder(stream, { mimeType });
 
-        mediaRecorder.ondataavailable = ( e ) => {
-            if ( e.data.size > 0 ) chunksRef.current.push( e.data );
+        mediaRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0) chunksRef.current.push(e.data);
         };
 
         mediaRecorder.onstop = () => {
-            const blob = new Blob( chunksRef.current, { type: mimeType } );
-            processAndFetchModel( blob );
+            const blob = new Blob(chunksRef.current, { type: mimeType });
+            processAndFetchModel(blob);
         };
 
         mediaRecorder.start();
         mediaRecorderRef.current = mediaRecorder;
     };
 
-    const fetchModelByName = async ( wordName: string ) => {
+    const fetchModelByName = async (wordName: string) => {
         try {
-            const downloadsResponse = await fetch( `${API_BASE_URL}/api/sign/downloads?name=${wordName}` );
+            const downloadsResponse = await fetch(`${API_BASE_URL}/api/sign/downloads?name=${wordName}`);
             const downloadsResult = await downloadsResponse.json();
 
-            if ( downloadsResult.code === 200 && downloadsResult.data.urls.length > 0 ) {
-                setGlbFrames( downloadsResult.data.urls );
-                setStatusText( "Playback ready." );
+            if (downloadsResult.code === 200 && downloadsResult.data.urls.length > 0) {
+                setGlbFrames(downloadsResult.data.urls);
+                setStatusText("Playback ready.");
             } else {
-                setStatusText( `No 3D model found for "${wordName}".` );
-                setGlbFrames( [] );
+                setStatusText(`No 3D model found for "${wordName}".`);
+                setGlbFrames([]);
             }
-        } catch ( error ) {
-            console.error( "API Error:", error );
-            setStatusText( "Failed to fetch 3D model." );
+        } catch (error) {
+            console.error("API Error:", error);
+            setStatusText("Failed to fetch 3D model.");
         }
     };
 
     // 🔥 新增：处理文本搜索框提交事件
-    const handleTextSearch = async ( e: React.FormEvent ) => {
+    const handleTextSearch = async (e: React.FormEvent) => {
         e.preventDefault(); // 阻止表单默认刷新
         const word = searchWord.trim().toUpperCase();
-        if ( !word ) return;
+        if (!word) return;
 
-        setIsProcessing( true );
-        setStatusText( `Searching for "${word}"...` );
-        setTranslatedText( word );
-        setConfidence( 0 ); // 文本搜索不需要置信度
-        setGlbFrames( [] );
+        setIsProcessing(true);
+        setStatusText(`Searching for "${word}"...`);
+        setTranslatedText(word);
+        setConfidence(0); // 文本搜索不需要置信度
+        setGlbFrames([]);
 
-        await fetchModelByName( word );
-        setIsProcessing( false );
+        await fetchModelByName(word);
+        setIsProcessing(false);
     };
 
     return (
@@ -140,7 +140,7 @@ export default function Translate() {
                 <div className="text-section">
                     <div className="text-header">
                         <span className={`live-dot ${isStreaming ? 'recording' : ''}`}></span>
-                        {isStreaming ? "RECORDING" : ( isProcessing ? "PROCESSING" : "READY" )}
+                        {isStreaming ? "RECORDING" : (isProcessing ? "PROCESSING" : "READY")}
                     </div>
 
                     <form
@@ -150,7 +150,7 @@ export default function Translate() {
                         <input
                             type="text"
                             value={searchWord}
-                            onChange={( e ) => setSearchWord( e.target.value )}
+                            onChange={(e) => setSearchWord(e.target.value)}
                             placeholder="Type a word (e.g. ACCIDENT)"
                             disabled={isProcessing || isStreaming}
                             style={{
@@ -174,9 +174,9 @@ export default function Translate() {
                                 border: '1px solid #00f0ff',
                                 borderRadius: '8px',
                                 color: '#00f0ff',
-                                cursor: ( !searchWord.trim() || isProcessing || isStreaming ) ? 'not-allowed' : 'pointer',
+                                cursor: (!searchWord.trim() || isProcessing || isStreaming) ? 'not-allowed' : 'pointer',
                                 fontWeight: 'bold',
-                                opacity: ( !searchWord.trim() || isProcessing || isStreaming ) ? 0.5 : 1,
+                                opacity: (!searchWord.trim() || isProcessing || isStreaming) ? 0.5 : 1,
                                 transition: 'all 0.3s'
                             }}
                         >
@@ -227,7 +227,7 @@ export default function Translate() {
                                 min="1"
                                 max="15"
                                 value={playbackFps}
-                                onChange={( e ) => setPlaybackFps( Number( e.target.value ) )}
+                                onChange={(e) => setPlaybackFps(Number(e.target.value))}
                                 style={{
                                     flex: 1,
                                     accentColor: '#00f0ff',
@@ -266,7 +266,7 @@ export default function Translate() {
                     <div className="control-bar">
                         <button
                             className={`toggle-btn ${isStreaming ? 'active' : ''}`}
-                            onClick={() => setIsStreaming( !isStreaming )}
+                            onClick={() => setIsStreaming(!isStreaming)}
                             disabled={isProcessing}
                         >
                             {isStreaming ? "Stop & Translate" : "Start Camera"}
@@ -282,18 +282,18 @@ export default function Translate() {
 const HandSkeletonSVG = () => (
     <svg viewBox="0 0 200 200" className="hand-svg">
         <circle cx="100" cy="150" r="4" fill="#00f0ff" />
-        <path d="M100 150 L60 140 L40 120 L30 100" stroke="rgba(0, 240, 255, 0.6)" strokeWidth="2" fill="none" />
+        <path d="M100 150 L60 140 L40 120 L30 100" stroke="rgba(0, 240, 255, 0.6)" strokeWidth="2" fill="none"/>
         <circle cx="60" cy="140" r="3" fill="#00f0ff" />
         <circle cx="40" cy="120" r="3" fill="#00f0ff" />
         <circle cx="30" cy="100" r="3" fill="#00f0ff" />
-        <path d="M100 150 L90 110 L85 80 L80 50" stroke="rgba(0, 240, 255, 0.6)" strokeWidth="2" fill="none" />
+        <path d="M100 150 L90 110 L85 80 L80 50" stroke="rgba(0, 240, 255, 0.6)" strokeWidth="2" fill="none"/>
         <circle cx="90" cy="110" r="3" fill="#00f0ff" />
         <circle cx="85" cy="80" r="3" fill="#00f0ff" />
         <circle cx="80" cy="50" r="3" fill="#00f0ff" />
-        <path d="M100 150 L105 105 L108 70 L110 40" stroke="rgba(0, 240, 255, 0.6)" strokeWidth="2" fill="none" />
+        <path d="M100 150 L105 105 L108 70 L110 40" stroke="rgba(0, 240, 255, 0.6)" strokeWidth="2" fill="none"/>
         <circle cx="105" cy="105" r="3" fill="#00f0ff" />
         <circle cx="108" cy="70" r="3" fill="#00f0ff" />
         <circle cx="110" cy="40" r="3" fill="#00f0ff" />
-        <circle cx="100" cy="150" r="10" stroke="#00f0ff" strokeWidth="1" fill="none" className="pulse-circle" />
+        <circle cx="100" cy="150" r="10" stroke="#00f0ff" strokeWidth="1" fill="none" className="pulse-circle"/>
     </svg>
 );

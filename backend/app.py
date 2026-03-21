@@ -17,7 +17,7 @@ load_dotenv(env_path)
 app = Flask(__name__)
 CORS(app, resources={
     r"/*": {
-        "origins": ["http://localhost:5173", "http://127.0.0.1:5173"],
+        "origins": ["https://signlanguage3d.xyz", "https://www.signlanguage3d.xyz"],
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
@@ -229,7 +229,7 @@ def downloads():
         for f in files:
             if f.endswith('.glb'):
                 rel = os.path.relpath(os.path.join(root, f), GLB_ROOT)
-                urls.append(f"http://{request.host}/result_3d/glb_models/{rel}")
+                urls.append(f"https://{request.host}/result_3d/glb_models/{rel}")
     
     urls.sort() # 确保帧顺序
     return jsonify({"code": 200, "data": {"urls": urls}})
