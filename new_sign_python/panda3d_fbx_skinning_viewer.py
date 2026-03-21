@@ -1,3 +1,4 @@
+```python
 #!/usr/bin/env python3
 """
 Axis-aware FBX skinning-driven Panda3D hand viewer.
@@ -7,10 +8,11 @@ Uses hierarchical swing-twist style quaternion driving without offset JSON.
 from __future__ import annotations
 
 import argparse
+import collections
 import json
 import math
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Set, Tuple
 
 from direct.actor.Actor import Actor
 from direct.showbase.ShowBase import ShowBase
@@ -115,6 +117,59 @@ LANDMARK_TO_BONE_SEQ_RIGHT = {
     ],
 }
 
+_PX = Vec3(1, 0, 0)
+_NX = Vec3(-1, 0, 0)
+_PY = Vec3(0, 1, 0)
+_PZ = Vec3(0, 0, 1)
+_NZ = Vec3(0, 0, -1)
+
+# From measured rest-pose probe results.
+LEFT_FORWARD_AXIS: Dict[str, Vec3] = {
+    "L_Wrist": _PZ,
+    "L_ThumbMetacarpal": _NZ,
+    "L_ThumbProximal": _PZ,
+    "L_ThumbDistal": _PZ,
+    "L_IndexMetacarpal": _PZ,
+    "L_IndexProximal": _NZ,
+    "L_IndexIntermediate": _NZ,
+    "L_IndexDistal": _NZ,
+    "L_MiddleMetacarpal": _PZ,
+    "L_MiddleProximal": _NZ,
+    "L_MiddleIntermediate": _NZ,
+    "L_MiddleDistal": _NZ,
+    "L_RingMetacarpal": _PZ,
+    "L_RingProximal": _NZ,
+    "L_RingIntermediate": _NZ,
+    "L_RingDistal": _NZ,
+    "L_LittleMetacarpal": _NX,
+    "L_LittleProximal": _NZ,
+    "L_LittleIntermediate": _NZ,
+    "L_LittleDistal": _NZ,
+}
+
+RIGHT_FORWARD_AXIS: Dict[str, Vec3] = {
+    "R_Wrist": _PZ,
+    "R_ThumbMetacarpal": _NZ,
+    "R_ThumbProximal": _PY,
+    "R_ThumbDistal": _PY,
+    "R_IndexMetacarpal": _PZ,
+    "R_IndexProximal": _NZ,
+    "R_IndexIntermediate": _NZ,
+    "R_IndexDistal": _NZ,
+    "R_MiddleMetacarpal": _PZ,
+    "R_MiddleProximal": _NZ,
+    "R_MiddleIntermediate": _NZ,
+    "R_MiddleDistal": _NZ,
+    "R_RingMetacarpal": _PZ,
+    "R_RingProximal": _NZ,
+    "R_RingIntermediate": _NZ,
+    "R_RingDistal": _NZ,
+    "R_LittleMetacarpal": _PX,
+    "R_LittleProximal": _NZ,
+    "R_LittleIntermediate": _NZ,
+    "R_LittleDistal": _NZ,
+}
+
 
 class FBXHandRig:
     def __init__(
@@ -128,6 +183,13 @@ class FBXHandRig:
         model_scale: float,
         landmark_scale: float,
         root_motion_scale: float,
+        bone_forward: Vec3,
+        forward_mode: str = "table",
+        finger_follow_hand: bool = False,
+        axis_calibration_frames: int = 6,
+        debug_dump: bool = False,
+        debug_max_frames: int = 2,
+        debug_bones: Set[str] | None = None,
     ) -> None:
         self.actor = actor
         self.actor_root = actor_root
@@ -138,12 +200,26 @@ class FBXHandRig:
         self.model_scale = max(0.001, model_scale)
         self.landmark_scale = max(0.1, landmark_scale)
         self.root_motion_scale = max(0.0, root_motion_scale)
+        self.debug_dump = bool(debug_dump)
+        self.debug_max_frames = max(0, int(debug_max_frames))
+        self.debug_bones = debug_bones or set()
+        self.forward_mode = forward_mode
+        self.finger_follow_hand = finger_follow_hand
+        self.axis_calibration_frames = max(1, int(axis_calibration_frames))
 
         self.mapping = LANDMARK_TO_BONE_SEQ_LEFT if is_left else LANDMARK_TO_BONE_SEQ_RIGHT
+        self.bone_forward = Vec3(bone_forward)
         self.joints: Dict[str, NodePath] = {}
         self.rest_quat: Dict[str, Quat] = {}
         self.prev_hpr: Dict[str, Vec3] = {}
         self.local_fwd: Dict[str, Vec3] = {}
+        self.axis_sign: Dict[str, float] = {}
+        self.axis_order: Dict[str, str] = {}
+        self.axis_calibrated = False
+        self.axis_calibration_seen = 0
+        self.axis_scores: Dict[str, Dict[Tuple[float, str], List[float]]] = collections.defaultdict(
+            lambda: collections.defaultdict(lambda: [0.0, 0.0])
+        )
 
         self.smoothed_pts: List[Vec3] = []
         self.root_pos = Vec3(0, 0, 0)
@@ -173,34 +249,45 @@ class FBXHandRig:
 
         self._init_local_forward_axes()
         self._init_rest_palm_frame()
+        for bone in self.joints.keys():
+            self.axis_sign[bone] = 1.0
+            self.axis_order[bone] = "r*rest"
+        if self.debug_dump:
+            side = "Left" if self.is_left else "Right"
+            print(
+                f"[debug][{side}] init bone_forward={tuple(round(v,4) for v in (self.bone_forward.x, self.bone_forward.y, self.bone_forward.z))}",
+                flush=True,
+            )
+            for bone in sorted(self.local_fwd.keys()):
+                lv = self.local_fwd[bone]
+                print(f"[debug][{side}] local_fwd {bone} = ({lv.x:.4f}, {lv.y:.4f}, {lv.z:.4f})", flush=True)
 
     def _init_local_forward_axes(self) -> None:
-        # Infer each bone's forward axis from rest-pose child direction.
-        for bone, node in self.joints.items():
-            if node.getNumChildren() <= 0:
-                continue
-            child = node.getChild(0)
-            d = child.getPos(self.actor_root) - node.getPos(self.actor_root)
-            if d.lengthSquared() < 1e-8:
-                continue
-            d.normalize()
-            inv_rest = Quat(self.rest_quat[bone])
-            inv_rest.invertInPlace()
-            local = inv_rest.xform(d)
-            if local.lengthSquared() < 1e-8:
-                continue
-            local.normalize()
-            self.local_fwd[bone] = local
-
-        # Fallback for distal bones without direct child in controlled chain.
-        for bone in self.joints.keys():
-            if bone in self.local_fwd:
-                continue
-            parent = bone.replace("Distal", "Intermediate").replace("ThumbDistal", "ThumbProximal")
-            if parent in self.local_fwd:
-                self.local_fwd[bone] = Vec3(self.local_fwd[parent])
+        if self.forward_mode == "table":
+            table = LEFT_FORWARD_AXIS if self.is_left else RIGHT_FORWARD_AXIS
+            fallback = Vec3(self.bone_forward)
+            if fallback.lengthSquared() < 1e-8:
+                fallback = Vec3(0, 1, 0)
             else:
-                self.local_fwd[bone] = Vec3(0, 0, 1)
+                fallback.normalize()
+            for bone in self.joints.keys():
+                v = table.get(bone, fallback)
+                vv = Vec3(v)
+                if vv.lengthSquared() < 1e-8:
+                    vv = Vec3(0, 1, 0)
+                else:
+                    vv.normalize()
+                self.local_fwd[bone] = vv
+            return
+
+        # Uniform mode.
+        fwd = Vec3(self.bone_forward)
+        if fwd.lengthSquared() < 1e-8:
+            fwd = Vec3(0, 1, 0)
+        else:
+            fwd.normalize()
+        for bone in self.joints.keys():
+            self.local_fwd[bone] = Vec3(fwd)
 
     def _init_rest_palm_frame(self) -> None:
         wrist_name = self.mapping["wrist"][1]
@@ -245,7 +332,7 @@ class FBXHandRig:
         else:
             self.actor_root.hide()
 
-    def drive_from_landmarks(self, landmarks: List[Dict], x_offset: float) -> bool:
+    def drive_from_landmarks(self, landmarks: List[Dict], x_offset: float, frame_idx: int = -1) -> bool:
         if len(landmarks) < 21:
             return False
         self.set_visible(True)
@@ -301,14 +388,28 @@ class FBXHandRig:
         curr_palm_q = Quat(self.curr_dummy.getQuat())
         r_hand = curr_palm_q * self.rest_palm_q.conjugate()
 
+        if not self.axis_calibrated:
+            self._auto_calibrate_axes(pts, r_hand, frame_idx)
+
+        do_debug_frame = self.debug_dump and (frame_idx < 0 or frame_idx < self.debug_max_frames)
+        if do_debug_frame:
+            side = "Left" if self.is_left else "Right"
+            rp = self.root_pos
+            print(
+                f"[debug][{side}][frame {frame_idx}] root=({rp.x:.4f},{rp.y:.4f},{rp.z:.4f}) "
+                f"palm_up=({self.palm_up_smooth.x:.4f},{self.palm_up_smooth.y:.4f},{self.palm_up_smooth.z:.4f}) "
+                f"palm_n=({self.palm_normal_smooth.x:.4f},{self.palm_normal_smooth.y:.4f},{self.palm_normal_smooth.z:.4f}) "
+                f"r_hand_hpr={r_hand.getHpr()}"
+            , flush=True)
+
         wrist_name = self.mapping["wrist"][1]
-        self._drive_bone(wrist_name, r_hand, pts[0], pts[9])
+        self._drive_bone(wrist_name, r_hand, pts[0], pts[9], frame_idx)
         for chain_name in ("thumb", "index", "middle", "ring", "little"):
             for lm_idx, bone_name, child_idx in self.mapping[chain_name]:
-                self._drive_bone(bone_name, r_hand, pts[lm_idx], pts[child_idx])
+                self._drive_bone(bone_name, r_hand, pts[lm_idx], pts[child_idx], frame_idx)
         return True
 
-    def _drive_bone(self, bone_name: str, r_hand: Quat, p: Vec3, c: Vec3) -> None:
+    def _drive_bone(self, bone_name: str, r_hand: Quat, p: Vec3, c: Vec3, frame_idx: int = -1) -> None:
         joint = self.joints.get(bone_name)
         if joint is None:
             return
@@ -317,12 +418,59 @@ class FBXHandRig:
             return
         target_dir.normalize()
 
-        base_q = r_hand * self.rest_quat[bone_name]
-        curr_fwd = base_q.xform(self.local_fwd.get(bone_name, Vec3(0, 0, 1)))
-        if curr_fwd.lengthSquared() < 1e-8:
+        local_fwd = self.local_fwd.get(bone_name, Vec3(0, 0, 1))
+        sign = self.axis_sign.get(bone_name, 1.0)
+        local_fwd = local_fwd * sign
+        if "Wrist" in bone_name or self.finger_follow_hand:
+            hand_q = r_hand
+        else:
+            hand_q = Quat.identQuat()
+
+        preferred_sign = self.axis_sign.get(bone_name, 1.0)
+        preferred_order = self.axis_order.get(bone_name, "r*rest")
+        base_q, curr_fwd, base_order, base_dot, sign = self._choose_pose_variant(
+            bone_name=bone_name,
+            hand_q=hand_q,
+            target_dir=target_dir,
+            preferred_sign=preferred_sign,
+            preferred_order=preferred_order,
+            strict_preferred=True,
+        )
+        if base_q is None:
             return
-        curr_fwd.normalize()
-        swing_q = self._shortest_arc(curr_fwd, target_dir)
+        # Runtime safeguard: if preferred axis becomes opposite to target direction, fallback to best current variant.
+        if base_dot < 0.10:
+            best_q, best_fwd, best_order, best_dot, best_sign = self._choose_pose_variant(
+                bone_name=bone_name,
+                hand_q=hand_q,
+                target_dir=target_dir,
+                preferred_sign=preferred_sign,
+                preferred_order=preferred_order,
+                strict_preferred=False,
+            )
+            if best_q is not None and best_dot > base_dot + 0.20:
+                prev_dot = base_dot
+                base_q, curr_fwd, base_order, base_dot, sign = best_q, best_fwd, best_order, best_dot, best_sign
+                if self.debug_dump and (frame_idx < 0 or frame_idx < self.debug_max_frames):
+                    side = "Left" if self.is_left else "Right"
+                    print(
+                        f"[debug][{side}][frame {frame_idx}] fallback bone={bone_name} "
+                        f"from(sign={preferred_sign:+.0f},order={preferred_order},dot={prev_dot:.3f}) "
+                        f"to(sign={best_sign:+.0f},order={best_order},dot={best_dot:.3f})",
+                        flush=True,
+                    )
+        # Low-confidence direction alignment guard: avoid full-angle snaps when base axis is weak.
+        swing_mix = max(0.0, min(1.0, (base_dot - 0.20) / 0.60))
+        if "Metacarpal" in bone_name:
+            swing_mix = min(swing_mix, 0.45)
+        if bone_name.endswith("ThumbMetacarpal") or bone_name.endswith("LittleMetacarpal"):
+            swing_mix = min(swing_mix, 0.30)
+        blend_dir = self._lerp_vec3(curr_fwd, target_dir, swing_mix)
+        if blend_dir.lengthSquared() < 1e-8:
+            blend_dir = Vec3(curr_fwd)
+        else:
+            blend_dir.normalize()
+        swing_q = self._shortest_arc(curr_fwd, blend_dir)
         target_q = swing_q * base_q
 
         alpha = 1.0 - self.rot_smooth
@@ -341,6 +489,137 @@ class FBXHandRig:
         smoothed_q = Quat()
         smoothed_q.setHpr(smoothed_hpr)
         joint.setQuat(self.actor_root, smoothed_q)
+
+        do_debug_frame = self.debug_dump and (frame_idx < 0 or frame_idx < self.debug_max_frames)
+        do_debug_bone = (not self.debug_bones) or (bone_name in self.debug_bones)
+        if do_debug_frame and do_debug_bone:
+            side = "Left" if self.is_left else "Right"
+            print(
+                f"[debug][{side}][frame {frame_idx}] bone={bone_name} "
+                f"alpha={alpha:.3f} "
+                f"local_fwd=({self.local_fwd[bone_name].x:.3f},{self.local_fwd[bone_name].y:.3f},{self.local_fwd[bone_name].z:.3f}) "
+                f"sign={sign:+.0f} "
+                f"target_dir=({target_dir.x:.3f},{target_dir.y:.3f},{target_dir.z:.3f}) "
+                f"curr_fwd=({curr_fwd.x:.3f},{curr_fwd.y:.3f},{curr_fwd.z:.3f}) "
+                f"swing_mix={swing_mix:.3f} "
+                f"base_order={base_order} base_dot={base_dot:.3f} "
+                f"base_hpr={base_q.getHpr()} swing_hpr={swing_q.getHpr()} "
+                f"target_hpr={target_hpr} smoothed_hpr={smoothed_hpr}"
+            , flush=True)
+
+    def _auto_calibrate_axes(self, pts: List[Vec3], r_hand: Quat, frame_idx: int) -> None:
+        side = "Left" if self.is_left else "Right"
+        if self.debug_dump and self.axis_calibration_seen == 0:
+            print(
+                f"[debug][{side}][frame {frame_idx}] auto-calibrate axis/order start "
+                f"(target_frames={self.axis_calibration_frames})",
+                flush=True,
+            )
+        used_any = False
+        for chain_name in ("wrist", "thumb", "index", "middle", "ring", "little"):
+            if chain_name == "wrist":
+                items = [self.mapping["wrist"]]
+            else:
+                items = self.mapping[chain_name]
+            for lm_idx, bone_name, child_idx in items:
+                if bone_name not in self.joints:
+                    continue
+                tdir = pts[child_idx] - pts[lm_idx]
+                if tdir.lengthSquared() < 1e-8:
+                    continue
+                tdir.normalize()
+                used_any = True
+                if "Wrist" in bone_name or self.finger_follow_hand:
+                    hand_q = r_hand
+                else:
+                    hand_q = Quat.identQuat()
+                rest_q = self.rest_quat[bone_name]
+                for sign in (1.0, -1.0):
+                    lf = self.local_fwd.get(bone_name, Vec3(0, 0, 1)) * sign
+                    qa = hand_q * rest_q
+                    qb = rest_q * hand_q
+                    fa = qa.xform(lf)
+                    fb = qb.xform(lf)
+                    if fa.lengthSquared() > 1e-8:
+                        fa.normalize()
+                        da = fa.dot(tdir)
+                        rec = self.axis_scores[bone_name][(sign, "r*rest")]
+                        rec[0] += da
+                        rec[1] += 1.0
+                    if fb.lengthSquared() > 1e-8:
+                        fb.normalize()
+                        db = fb.dot(tdir)
+                        rec = self.axis_scores[bone_name][(sign, "rest*r")]
+                        rec[0] += db
+                        rec[1] += 1.0
+        if not used_any:
+            return
+        self.axis_calibration_seen += 1
+        if self.axis_calibration_seen < self.axis_calibration_frames:
+            if self.debug_dump and (frame_idx < 0 or frame_idx < self.debug_max_frames):
+                print(
+                    f"[debug][{side}][frame {frame_idx}] auto-cal progress "
+                    f"{self.axis_calibration_seen}/{self.axis_calibration_frames}",
+                    flush=True,
+                )
+            return
+        for bone_name, options in self.axis_scores.items():
+            best_score = None
+            best_sign = self.axis_sign.get(bone_name, 1.0)
+            best_order = self.axis_order.get(bone_name, "r*rest")
+            for (sign, order), (sum_dot, cnt) in options.items():
+                if cnt <= 0.0:
+                    continue
+                avg = sum_dot / cnt
+                if best_score is None or avg > best_score:
+                    best_score = avg
+                    best_sign = sign
+                    best_order = order
+            self.axis_sign[bone_name] = best_sign
+            self.axis_order[bone_name] = best_order
+            if self.debug_dump:
+                print(
+                    f"[debug][{side}] auto-cal locked bone={bone_name} "
+                    f"avg_dot={best_score if best_score is not None else -9.0:.3f} "
+                    f"sign={best_sign:+.0f} order={best_order}",
+                    flush=True,
+                )
+        self.axis_calibrated = True
+        if self.debug_dump:
+            print(f"[debug][{side}] auto-calibrate axis/order done", flush=True)
+
+    def _choose_pose_variant(
+        self,
+        bone_name: str,
+        hand_q: Quat,
+        target_dir: Vec3,
+        preferred_sign: float,
+        preferred_order: str,
+        strict_preferred: bool,
+    ):
+        rest_q = self.rest_quat[bone_name]
+        local_fwd_base = self.local_fwd.get(bone_name, Vec3(0, 0, 1))
+        candidates = []
+        for sign in (1.0, -1.0):
+            lf = local_fwd_base * sign
+            qa = hand_q * rest_q
+            qb = rest_q * hand_q
+            fa = qa.xform(lf)
+            fb = qb.xform(lf)
+            if fa.lengthSquared() > 1e-8:
+                fa.normalize()
+                candidates.append((qa, fa, "r*rest", fa.dot(target_dir), sign))
+            if fb.lengthSquared() > 1e-8:
+                fb.normalize()
+                candidates.append((qb, fb, "rest*r", fb.dot(target_dir), sign))
+        if not candidates:
+            return None, None, "", -1.0, preferred_sign
+        if strict_preferred:
+            for item in candidates:
+                _, _, order, _, sign = item
+                if sign == preferred_sign and order == preferred_order:
+                    return item
+        return max(candidates, key=lambda it: it[3])
 
     def _lm_to_local(self, lm: Dict, x_offset: float) -> Vec3:
         x = (float(lm["x"]) - 0.5) * self.landmark_scale
@@ -412,6 +691,12 @@ class FBXSkinningViewer(ShowBase):
         pos_smooth: float,
         rot_smooth: float,
         wrist_stability: float,
+        bone_forward: Vec3,
+        forward_mode: str,
+        finger_follow_hand: bool,
+        debug_dump: bool,
+        debug_max_frames: int,
+        debug_bones: Set[str],
     ) -> None:
         super().__init__()
         self.disableMouse()
@@ -430,6 +715,8 @@ class FBXSkinningViewer(ShowBase):
         self.right_miss = 0
         self.cam_y_min = -6.0
         self.cam_y_max = -0.20
+        self.debug_dump = debug_dump
+        self.debug_max_frames = debug_max_frames
 
         self._init_window()
         self._init_scene()
@@ -446,6 +733,12 @@ class FBXSkinningViewer(ShowBase):
             model_scale=model_scale,
             landmark_scale=landmark_scale,
             root_motion_scale=root_motion_scale,
+            bone_forward=bone_forward,
+            forward_mode=forward_mode,
+            finger_follow_hand=finger_follow_hand,
+            debug_dump=debug_dump,
+            debug_max_frames=debug_max_frames,
+            debug_bones=debug_bones,
         )
         self.right_rig = FBXHandRig(
             self.right_actor,
@@ -457,6 +750,12 @@ class FBXSkinningViewer(ShowBase):
             model_scale=model_scale,
             landmark_scale=landmark_scale,
             root_motion_scale=root_motion_scale,
+            bone_forward=bone_forward,
+            forward_mode=forward_mode,
+            finger_follow_hand=finger_follow_hand,
+            debug_dump=debug_dump,
+            debug_max_frames=debug_max_frames,
+            debug_bones=debug_bones,
         )
         self.left_rig.set_visible(False)
         self.right_rig.set_visible(False)
@@ -577,6 +876,9 @@ class FBXSkinningViewer(ShowBase):
     def _apply_frame(self, frame_idx: int) -> None:
         frame = self.frames[frame_idx]
         hands = frame.get("hands", [])
+        if self.debug_dump and frame_idx < self.debug_max_frames:
+            htypes = [h.get("hand_type", "?") for h in hands]
+            print(f"[debug][frame {frame_idx}] hands={len(hands)} types={htypes}", flush=True)
         left = None
         right = None
         for h in hands:
@@ -591,7 +893,11 @@ class FBXSkinningViewer(ShowBase):
             if not self.freeze_on_miss and self.left_miss >= self.hide_after_miss:
                 self.left_rig.set_visible(False)
         else:
-            ok = self.left_rig.drive_from_landmarks(left.get("landmarks", []), x_offset=-self.hand_separation)
+            ok = self.left_rig.drive_from_landmarks(
+                left.get("landmarks", []),
+                x_offset=-self.hand_separation,
+                frame_idx=frame_idx,
+            )
             if ok:
                 self.left_miss = 0
             else:
@@ -604,7 +910,11 @@ class FBXSkinningViewer(ShowBase):
             if not self.freeze_on_miss and self.right_miss >= self.hide_after_miss:
                 self.right_rig.set_visible(False)
         else:
-            ok = self.right_rig.drive_from_landmarks(right.get("landmarks", []), x_offset=self.hand_separation)
+            ok = self.right_rig.drive_from_landmarks(
+                right.get("landmarks", []),
+                x_offset=self.hand_separation,
+                frame_idx=frame_idx,
+            )
             if ok:
                 self.right_miss = 0
             else:
@@ -627,11 +937,57 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--pos-smooth", type=float, default=0.72)
     p.add_argument("--rot-smooth", type=float, default=0.82)
     p.add_argument("--wrist-stability", type=float, default=0.65)
+    p.add_argument(
+        "--bone-forward",
+        default="0,1,0",
+        help="Uniform local forward axis for all bones: x,y,z (e.g. 0,1,0 or 0,-1,0 or 0,0,1)",
+    )
+    p.add_argument(
+        "--forward-mode",
+        choices=["table", "uniform"],
+        default="table",
+        help="Use measured per-bone axis table or one uniform axis for all bones",
+    )
+    p.add_argument(
+        "--finger-follow-hand",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="If true, apply palm global rotation to finger base orientation too",
+    )
+    p.add_argument("--debug-dump", action="store_true", help="Print detailed per-frame and per-bone debug data")
+    p.add_argument("--debug-max-frames", type=int, default=2, help="How many initial frames to print in debug mode")
+    p.add_argument(
+        "--debug-bones",
+        default="",
+        help="Comma-separated bone names to print; empty means all bones",
+    )
     return p
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    try:
+        bx, by, bz = [float(v.strip()) for v in args.bone_forward.split(",")]
+        bone_forward = Vec3(bx, by, bz)
+    except Exception as e:
+        raise SystemExit(f"invalid --bone-forward '{args.bone_forward}': {e}")
+    debug_bones: Set[str] = set()
+    if args.debug_bones.strip():
+        debug_bones = {b.strip() for b in args.debug_bones.split(",") if b.strip()}
+    if args.debug_dump:
+        print(
+            "[debug][startup] "
+            f"stream={Path(args.stream).resolve()} "
+            f"left_fbx={Path(args.left_fbx).resolve()} "
+            f"right_fbx={Path(args.right_fbx).resolve()} "
+            f"fps={args.fps} hand_separation={args.hand_separation} hide_after_miss={args.hide_after_miss} "
+            f"model_scale={args.model_scale} landmark_scale={args.landmark_scale} "
+            f"root_motion_scale={args.root_motion_scale} pos_smooth={args.pos_smooth} "
+            f"rot_smooth={args.rot_smooth} wrist_stability={args.wrist_stability} "
+            f"forward_mode={args.forward_mode} finger_follow_hand={args.finger_follow_hand} "
+            f"bone_forward={args.bone_forward} debug_max_frames={args.debug_max_frames} "
+            f"debug_bones={sorted(debug_bones) if debug_bones else 'ALL'}"
+        , flush=True)
     app = FBXSkinningViewer(
         stream_path=Path(args.stream).resolve(),
         left_fbx=Path(args.left_fbx).resolve(),
@@ -645,6 +1001,12 @@ def main() -> None:
         pos_smooth=args.pos_smooth,
         rot_smooth=args.rot_smooth,
         wrist_stability=args.wrist_stability,
+        bone_forward=bone_forward,
+        forward_mode=args.forward_mode,
+        finger_follow_hand=args.finger_follow_hand,
+        debug_dump=args.debug_dump,
+        debug_max_frames=args.debug_max_frames,
+        debug_bones=debug_bones,
     )
     app.run()
 
