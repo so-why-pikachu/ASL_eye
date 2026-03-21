@@ -1,3 +1,4 @@
 opencv-python
 mediapipe
 pymysql
+panda3d

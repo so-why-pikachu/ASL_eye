@@ -74,3 +74,29 @@ conda run -n voice_to_gemini python new_sign_python/offline_hand_pipeline.py \
   --mysql-user root --mysql-password 123456 --mysql-database sign_language \
   --output-jsonl "F:\\sign_language\\new_sign_python\\unity_gesture_stream_0000197996356050556-CELERY.jsonl"
 ```
+
+## Panda3D 3D Viewer (360 / Zoom)
+
+You can inspect the same stream with Panda3D:
+
+```powershell
+conda run -n voice_to_gemini python new_sign_python/panda3d_hand_viewer.py `
+  --stream "F:\sign_language\new_sign_python\unity_gesture_stream_0000197996356050556-CELERY.jsonl"
+```
+
+Controls:
+- Left mouse drag: orbit 360 degrees
+- Mouse wheel: zoom in/out
+- Space: play/pause
+- Left/Right arrow: step frame
+
+## Panda3D Skin Mesh Viewer (refined)
+
+For fuller skin-like hand surface (capsule mesh + smooth joints):
+
+```powershell
+conda run -n voice_to_gemini python new_sign_python/panda3d_skin_mesh_viewer.py `
+  --stream "F:\sign_language\new_sign_python\unity_gesture_stream_0000197996356050556-CELERY.jsonl"
+```
+
+This mode is designed for more detailed visual quality and supports 360 orbit + zoom.
