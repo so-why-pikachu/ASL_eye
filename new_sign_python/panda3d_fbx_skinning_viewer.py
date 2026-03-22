@@ -210,7 +210,7 @@ class FBXHandRig:
         self.bone_forward = Vec3(bone_forward)
         self.joints: Dict[str, NodePath] = {}
         self.rest_quat: Dict[str, Quat] = {}
-        self.prev_hpr: Dict[str, Vec3] = {}
+        self.prev_quat: Dict[str, Quat] = {}
         self.local_fwd: Dict[str, Vec3] = {}
         self.axis_sign: Dict[str, float] = {}
         self.axis_order: Dict[str, str] = {}
@@ -243,8 +243,7 @@ class FBXHandRig:
         for bone, node in self.joints.items():
             q = Quat(node.getQuat(self.actor_root))
             self.rest_quat[bone] = q
-            hpr = node.getHpr(self.actor_root)
-            self.prev_hpr[bone] = Vec3(hpr.x, hpr.y, hpr.z)
+            self.prev_quat[bone] = Quat(q)
 
         self._init_local_forward_axes()
         self._init_rest_palm_frame()
@@ -476,23 +475,33 @@ class FBXHandRig:
         if "Wrist" in bone_name:
             alpha *= (1.0 - 0.7 * self.wrist_stability)
         alpha = max(0.02, min(1.0, alpha))
-
-        target_hpr = target_q.getHpr()
-        prev_hpr = self.prev_hpr.get(bone_name, target_hpr)
-        smoothed_hpr = Vec3(
-            self._lerp_angle(prev_hpr.x, target_hpr.x, alpha),
-            self._lerp_angle(prev_hpr.y, target_hpr.y, alpha),
-            self._lerp_angle(prev_hpr.z, target_hpr.z, alpha),
+        # Quaternion-only smoothing (NLERP) to avoid Euler wrap/gimbal flips.
+        prev_q = self.prev_quat.get(bone_name, target_q)
+        dot = (
+            prev_q.getR() * target_q.getR()
+            + prev_q.getI() * target_q.getI()
+            + prev_q.getJ() * target_q.getJ()
+            + prev_q.getK() * target_q.getK()
         )
-        self.prev_hpr[bone_name] = smoothed_hpr
-        smoothed_q = Quat()
-        smoothed_q.setHpr(smoothed_hpr)
+        if dot < 0.0:
+            target_q = Quat(-target_q.getR(), -target_q.getI(), -target_q.getJ(), -target_q.getK())
+
+        smoothed_q = Quat(
+            prev_q.getR() + (target_q.getR() - prev_q.getR()) * alpha,
+            prev_q.getI() + (target_q.getI() - prev_q.getI()) * alpha,
+            prev_q.getJ() + (target_q.getJ() - prev_q.getJ()) * alpha,
+            prev_q.getK() + (target_q.getK() - prev_q.getK()) * alpha,
+        )
+        smoothed_q.normalize()
+        self.prev_quat[bone_name] = Quat(smoothed_q)
         joint.setQuat(self.actor_root, smoothed_q)
 
         do_debug_frame = self.debug_dump and (frame_idx < 0 or frame_idx < self.debug_max_frames)
         do_debug_bone = (not self.debug_bones) or (bone_name in self.debug_bones)
         if do_debug_frame and do_debug_bone:
             side = "Left" if self.is_left else "Right"
+            target_hpr = target_q.getHpr()
+            smoothed_hpr = smoothed_q.getHpr()
             print(
                 f"[debug][{side}][frame {frame_idx}] bone={bone_name} "
                 f"alpha={alpha:.3f} "
