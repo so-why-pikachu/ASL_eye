@@ -11,6 +11,7 @@ All code is in new_sign_python.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -482,12 +483,24 @@ def export_unity_gesture_stream(mysql_cfg: MySQLConfig, video_id: str, output_js
         )
 
     output_jsonl.parent.mkdir(parents=True, exist_ok=True)
+    last_hands: Optional[List[Dict]] = None
+
     with output_jsonl.open("w", encoding="utf-8") as f:
         for idx in frame_indexes:
-            hands = hands_by_frame.get(idx, [])
+            hands = hands_by_frame.get(idx)
+            if hands:
+                last_hands = copy.deepcopy(hands)
+                frame_hands = hands
+            elif last_hands is not None:
+                # Hold the previous detected hand state when tracking drops for a frame.
+                frame_hands = copy.deepcopy(last_hands)
+            else:
+                # Before the first valid detection, keep the default scene pose by emitting no hands.
+                frame_hands = []
+
             pkt = {
-                "hand_count": len(hands),
-                "hands": hands,
+                "hand_count": len(frame_hands),
+                "hands": frame_hands,
             }
             f.write(json.dumps(pkt, ensure_ascii=False) + "\n")
 
