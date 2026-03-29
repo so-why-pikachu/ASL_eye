@@ -1,321 +1,337 @@
-.sign-container {
-    width: 100vw;
-    height: 100vh;
-    padding: 100px 5vw 50px 5vw; /* 留出 Header 空间 */
-    box-sizing: border-box;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-
-    background: transparent;
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+.translate-page {
+  min-height: 100vh;
+  padding: 108px 5vw 48px;
+  box-sizing: border-box;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
 }
 
-/* 2. 主卡片：磨砂玻璃 + 左右布局 */
-.sign-card {
-    width: 100%;
-    max-width: 1800px;
-    height: 90vh;
-    min-height: 550px;
-
-    display: flex;
-    /* 大圆角 */
-    border-radius: 32px;
-
-    /* 玻璃质感 - 这里的颜色调得更“清透”一点 */
-    background: rgba(20, 20, 20, 0.4);
-    backdrop-filter: blur(30px);
-    -webkit-backdrop-filter: blur(30px);
-
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: 0 40px 100px rgba(0,0,0,0.5);
-    overflow: hidden;
+.translate-shell {
+  position: relative;
+  width: min(1800px, 100%);
+  min-height: calc(100vh - 156px);
+  padding: 18px;
+  display: flex;
+  border-radius: 32px;
+  background:
+    radial-gradient(circle at top left, rgba(68, 110, 255, 0.2), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(74, 221, 196, 0.16), transparent 34%),
+    rgba(12, 15, 26, 0.54);
+  backdrop-filter: blur(28px);
+  -webkit-backdrop-filter: blur(28px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 38px 90px rgba(0, 0, 0, 0.42);
+  overflow: hidden;
 }
 
-/* --- 左侧：翻译文本区 --- */
-.text-section {
-    width: 50%;
-    flex: 0 0 50%;
-    padding: 60px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    border-right: 1px solid rgba(255, 255, 255, 0.05);
-
-    min-width: 0;
-    min-height: 0;
+.translate-shell__glow {
+  position: absolute;
+  width: 320px;
+  height: 320px;
+  border-radius: 50%;
+  filter: blur(96px);
+  opacity: 0.3;
+  pointer-events: none;
 }
 
-.text-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: #888;
-    letter-spacing: 1px;
+.translate-shell__glow--left {
+  top: -80px;
+  left: -90px;
+  background: rgba(116, 119, 255, 0.6);
 }
 
-.live-dot {
-    width: 8px;
-    height: 8px;
-    background: #ff4757;
-    border-radius: 50%;
-    box-shadow: 0 0 10px #ff4757;
+.translate-shell__glow--right {
+  right: -110px;
+  bottom: -120px;
+  background: rgba(69, 217, 197, 0.46);
 }
 
-.text-display {
-    flex: 0 0 auto;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    margin-top: 10px;
-    align-items: flex-start;
+.translate-panel {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+  gap: 22px;
 }
 
-.main-text {
-    font-size: 3.5rem;
-    font-weight: 800;
-    color: #fff;
-    margin: 0;
-    line-height: 1.1;
-
-    background: linear-gradient(135deg, #fff 0%, #a5b4fc 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-
-    /* 简单的打字机进入动画 */
-    animation: fadeUp 0.5s ease-out;
+.translate-panel__status {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 28px 18px 28px 14px;
 }
 
-.confidence-badge {
-    margin: 10px 0 10px 0;
-    background: rgba(255, 255, 255, 0.1);
-    padding: 6px 16px;
-    border-radius: 20px;
-    font-size: 0.9rem;
-    color: #ccc;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+.translate-panel__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  align-self: flex-start;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #c7d8eb;
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
-
-.ai-output-wrapper {
-    /* 核心：占满剩余垂直空间 */
-    flex: 1;
-    width: 100%;
-    margin: 20px 0; /* 和上下的文字保持间距 */
-    min-height: 250px; /* 防止在极小屏幕下被挤压到看不见 */
-
-    /* 玻璃/暗色背景质感 */
-    background: rgba(0, 0, 0, 0.2);
-    border-radius: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: inset 0 0 20px rgba(0,0,0,0.5);
-    overflow: hidden;
-    position: relative;
+.translate-panel__content {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 22px;
+  min-width: 0;
+  width: 100%;
 }
 
-.output-3d-container {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    width: 100%;
-    height: 100%;
+.translate-panel__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(140, 158, 182, 0.7);
 }
 
-/* GSAP 动画容器 */
-.canvas-wrapper {
-    width: 100%;
-    height: 100%;
-    opacity: 0; /* 初始隐藏，等 GSAP 控制淡入 */
-    cursor: grab; /* 提示用户可以拖拽旋转 3D 模型 */
+.translate-panel__dot.is-live {
+  background: #ff7568;
+  box-shadow: 0 0 14px rgba(255, 117, 104, 0.9);
 }
 
-.canvas-wrapper:active {
-    cursor: grabbing;
+.translate-panel__result-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-start;
+  max-width: 100%;
 }
 
-/* --- 状态提示 (空状态 / 加载中) --- */
-.empty-state,
-.loading-state {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-family: monospace;
-    font-size: 1.1rem;
-    z-index: 10;
+.translate-panel__title {
+  margin: 0;
+  color: #f6fbff;
+  font-size: clamp(1.85rem, 2.8vw, 3.1rem);
+  line-height: 1.06;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  text-align: center;
+  max-width: 100%;
+  white-space: nowrap;
 }
 
-.empty-state {
-    color: #555;
+.translate-panel__confidence {
+  margin: 0;
+  color: rgba(207, 255, 247, 0.88);
+  font-size: clamp(1.05rem, 1.8vw, 1.5rem);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transform: translateX(-20px);
 }
 
-.loading-state {
-    color: #00f0ff; /* 使用与右侧骨架相同的青色 */
-    text-shadow: 0 0 10px rgba(0, 240, 255, 0.4);
-    animation: textPulse 1.5s infinite ease-in-out;
+.translate-panel__status-copy {
+  margin: 0;
+  max-width: 34rem;
+  color: rgba(204, 219, 236, 0.8);
+  font-size: clamp(1rem, 1.3vw, 1.12rem);
+  line-height: 1.6;
+  text-align: center;
 }
 
-@keyframes textPulse {
-    0%, 100% { opacity: 0.5; }
-    50% { opacity: 1; }
+.translate-camera-card {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 8px;
+  border-radius: 28px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02)),
+    rgba(5, 9, 18, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  overflow: hidden;
 }
 
-/* --- 手指摆动动画 --- */
-.wiggle-1 { transform-origin: 100px 150px; animation: fingerWiggle 2s infinite ease-in-out; }
-.wiggle-2 { transform-origin: 100px 150px; animation: fingerWiggle 2.5s infinite ease-in-out 0.2s; }
-.wiggle-3 { transform-origin: 100px 150px; animation: fingerWiggle 3s infinite ease-in-out 0.4s; }
-
-@keyframes fingerWiggle {
-    0%, 100% { transform: rotate(0deg); }
-    50% { transform: rotate(5deg); } /* 轻微摆动 5度 */
+.translate-camera-card__frame {
+  position: relative;
+  flex: 1;
+  min-height: 520px;
+  border-radius: 26px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top, rgba(88, 177, 255, 0.16), transparent 34%),
+    linear-gradient(180deg, rgba(7, 11, 20, 0.92), rgba(3, 5, 11, 0.98));
+  border: 1px solid rgba(132, 210, 255, 0.14);
+  box-shadow:
+    inset 0 0 40px rgba(0, 0, 0, 0.36),
+    0 24px 50px rgba(0, 0, 0, 0.28);
 }
 
-.instruction {
-    color: #666;
-    font-size: 0.95rem;
+.translate-camera-card__frame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  background-size: 42px 42px;
+  opacity: 0.4;
+  pointer-events: none;
 }
 
-/* --- 右侧：摄像头区 --- */
-.camera-section {
-    flex: 0 0 50%;
-    padding: 25px;
-    display: flex;
-    flex-direction: column;
-    position: relative;
-    background: rgba(0, 0, 0, 0.2);
-    min-width: 0;
-    max-width: 690px;
-    min-height: 0;
+.translate-camera-card__video,
+.translate-camera-card__placeholder {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
 }
 
-.camera-wrapper {
-    flex: 1;
-    width: 100%;
-    border-radius: 24px;
-    overflow: hidden;
-    position: relative;
-    background: #000;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    box-shadow: inset 0 0 50px rgba(0,0,0,0.5);
+.translate-camera-card__video {
+  object-fit: cover;
+  transform: scaleX(-1);
 }
 
-.webcam-video {
-    width: 100%;
-    height: 100%;
-    object-fit: cover;
-    transform: scaleX(-1);
+.translate-camera-card__overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(7, 11, 20, 0.08), rgba(7, 11, 20, 0.22));
 }
 
-/* 骨架层叠加 */
-.skeleton-overlay {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    pointer-events: none;
-    opacity: 0.8;
+.translate-hand-svg {
+  width: min(34vw, 300px);
+  height: min(34vw, 300px);
+  filter: drop-shadow(0 0 10px rgba(98, 240, 216, 0.3));
+  opacity: 0.78;
 }
 
-.hand-svg {
-    width: 60%;
-    height: 60%;
-    filter: drop-shadow(0 0 5px rgba(0, 240, 255, 0.5));
+.translate-hand-svg__pulse {
+  animation: translatePulse 1.8s infinite;
 }
 
-.pulse-circle {
-    animation: pulse 1.5s infinite;
+.translate-camera-card__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  box-sizing: border-box;
 }
 
-/* 占位符 */
-.camera-placeholder {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    color: #555;
-}
-.placeholder-icon {
-    font-size: 3rem;
-    margin-bottom: 10px;
-    opacity: 0.5;
+.translate-camera-card__placeholder-icon {
+  font-size: clamp(3.25rem, 8vw, 5rem);
+  line-height: 1;
 }
 
-/* 底部悬浮控制栏 */
-.control-bar {
-    position: absolute;
-    bottom: 50px;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 10;
+.translate-camera-card__button {
+  align-self: center;
+  border: none;
+  cursor: pointer;
+  min-width: 188px;
+  height: 58px;
+  padding: 0 26px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #7ccfff 0%, #66f1cb 100%);
+  color: #07131f;
+  font-size: 1rem;
+  font-weight: 700;
+  box-shadow: 0 16px 32px rgba(87, 190, 219, 0.28);
+  transition: transform 0.24s ease, box-shadow 0.24s ease, opacity 0.24s ease;
 }
 
-.toggle-btn {
-    padding: 16px 40px;
-    border-radius: 50px; /* 胶囊按钮 */
-    border: none;
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-    box-shadow: 0 10px 30px rgba(0,0,0,0.3);
-
-    /* 默认是白色按钮 */
-    background: #fff;
-    color: #000;
+.translate-camera-card__button:hover:not(:disabled) {
+  transform: translateY(-2px);
 }
 
-.toggle-btn:hover {
-    transform: scale(1.05);
-    box-shadow: 0 15px 40px rgba(255, 255, 255, 0.2);
+.translate-camera-card__button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
-/* 激活状态变成红色停止按钮 */
-.toggle-btn.active {
-    background: #ff4757;
-    color: #fff;
-}
-.toggle-btn.active:hover {
-    box-shadow: 0 15px 40px rgba(255, 71, 87, 0.4);
+.translate-camera-card__button.is-live {
+  background: linear-gradient(135deg, #ff9a72 0%, #ff5d6e 100%);
+  color: #fff9f8;
+  box-shadow: 0 16px 32px rgba(255, 93, 110, 0.28);
 }
 
-/* 动画 */
-@keyframes pulse {
-    0% { r: 10px; opacity: 1; stroke-width: 2px; }
-    100% { r: 30px; opacity: 0; stroke-width: 0px; }
+@keyframes translatePulse {
+  0% {
+    r: 10px;
+    opacity: 1;
+    stroke-width: 2px;
+  }
+
+  100% {
+    r: 30px;
+    opacity: 0;
+    stroke-width: 0;
+  }
 }
 
-@keyframes fadeUp {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-
-/* 移动端适配 */
 @media (max-width: 900px) {
-    .sign-card {
-        flex-direction: column-reverse; /* 手机上摄像头在上面 */
-        height: auto;
-    }
-    .camera-section {
-        height: 400px; /* 固定摄像头高度 */
-    }
-    .text-section {
-        padding: 40px 30px;
-        text-align: center;
-        border-right: none;
-        border-top: 1px solid rgba(255, 255, 255, 0.1);
-    }
-    .text-display {
-        align-items: center;
-    }
-    .main-text {
-        font-size: 2.5rem;
-    }
+  .translate-page {
+    padding: 92px 16px 28px;
+  }
+
+  .translate-shell {
+    min-height: auto;
+    padding: 12px;
+    border-radius: 24px;
+  }
+
+  .translate-panel {
+    flex-direction: column;
+    gap: 18px;
+  }
+
+  .translate-panel__status {
+    padding: 0 2px;
+    gap: 18px;
+  }
+
+  .translate-panel__result-row {
+    gap: 6px;
+  }
+
+  .translate-panel__title {
+    font-size: clamp(1.8rem, 9vw, 3rem);
+    white-space: normal;
+  }
+
+  .translate-panel__confidence {
+    font-size: clamp(0.95rem, 4vw, 1.2rem);
+  }
+
+  .translate-panel__status-copy {
+    max-width: none;
+  }
+
+  .translate-camera-card,
+  .translate-camera-card {
+    padding: 8px;
+    border-radius: 22px;
+  }
+
+  .translate-camera-card__frame {
+    min-height: 320px;
+  }
+
+  .translate-camera-card__button {
+    width: 100%;
+    min-width: 0;
+  }
 }

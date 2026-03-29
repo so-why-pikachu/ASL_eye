@@ -9,9 +9,8 @@ const Header: React.FC = () => {
         { name: 'Home', path: '/' },
         { name: 'About', path: '/about' },
         { name: 'Translate', path: '/translate' },
-        { name: 'Learning', path: '/learning' },
+        { name: 'Learning', path: '/search' },
         { name: 'Contacts', path: '/contacts' },
-        { name: 'Search', path: '/search' },
     ];
 
     const handleClick = (

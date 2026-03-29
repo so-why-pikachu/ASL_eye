@@ -30,8 +30,8 @@ export default function Contact() {
             id: 2,
             icon: <MailIcon />,
             label: "Email",
-            content: "hello@studio.com",
-            link: "mailto:hello@studio.com"
+            content: "1784927167@qq.com",
+            link: "1784927167@qq.com"
         },
         {
             id: 3,

@@ -19,15 +19,8 @@ const aboutData: HistoryNode[] = [
         id: 1,
         year: "1",
         title: "Translate Page",
-        description: "打开摄像头之后，您可以做出手语动作，然后左边部分会反馈以模型的文本输出、置信度和对应的SRHand教学动作，左手为肉色，右手为蓝色",
+        description: "打开摄像头之后，您可以做出手语动作，然后左边部分会反馈以模型的文本输出、置信度和对应的Unity教学动作，左手为肉色，右手为蓝色",
         imageUrl: "https://picsum.photos/800/600?random=1" // 👈 换成这个
-    },
-    {
-        id: 2,
-        year: "2",
-        title: "Learning Page",
-        description: "这里有许多生动的卡片，鼠标悬停之上可以自动播放教学视频",
-        imageUrl: "https://picsum.photos/800/600?random=2" // 👈 换成这个
     },
     {
         id: 3,
@@ -35,6 +28,13 @@ const aboutData: HistoryNode[] = [
         title: "Contact Page",
         description: "在这里你可以了解我们的信息，期待与您的进一步交流！",
         imageUrl: "https://picsum.photos/800/600?random=3" // 👈 换成这个
+    },
+    {
+        id: 3,
+        year: "3",
+        title: "Learning Page",
+        description: "在这里你可以搜索任何你想学的手语动作，我们会提供相关的教学视频和放大模型。摁住Alt+左键可以旋转视角，摁住中键可以平移视角。",
+        imageUrl: "https://picsum.photos/800/600?random=4" // é¦ƒæ†Ÿ éŽ¹ãˆ¡åžšæ©æ¬Žé‡œ
     },
 ];
 const About: React.FC = () => {

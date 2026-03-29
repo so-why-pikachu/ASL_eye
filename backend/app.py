@@ -1,141 +1,84 @@
 import os
-import sys
+import re
 import cv2
 import tempfile
-import numpy as np
-import pymysql
-from flask import Flask, request, jsonify, send_from_directory
-from flask_cors import CORS
-from dotenv import load_dotenv 
+from flask import Flask, request, jsonify, send_from_directory, url_for
+from flask_cors import CORS 
+from werkzeug.middleware.proxy_fix import ProxyFix
 import config
 from inference_camera import SignLanguageInferencePipeline
 
-env_path=config.ENV_PATH
-
-load_dotenv(env_path)
 
 app = Flask(__name__)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 CORS(app, resources={
     r"/*": {
-        "origins": ["https://signlanguage3d.xyz", "https://www.signlanguage3d.xyz"],
+        "origins": [
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+            "http://localhost:18081",
+            "http://127.0.0.1:18081",
+        ],
         "methods": ["GET", "POST", "OPTIONS"],
         "allow_headers": ["Content-Type", "Authorization"]
     }
 })
 
 # 配置
-GLB_ROOT = config.GLB_ROOT
-
-DB_HOST = os.getenv("DB_HOST")
-DB_PORT = int(os.getenv("DB_PORT"))
-DB_USER = os.getenv("DB_USER")
-DB_PASSWORD = os.getenv("DB_PASSWORD")
-DB_NAME = os.getenv("DB_NAME")
-
-# 供后续请求使用的连接池配置
-DB_CONFIG = {
-    'host': DB_HOST,
-    'port': DB_PORT,
-    'user': DB_USER,
-    'password': DB_PASSWORD,
-    'db': DB_NAME,
-    'charset': 'utf8mb4'
-}
-
-
-# 数据库自动化初始化
-def init_db():
-    """在应用启动前，检查并自动创建数据库和表"""
-    try:
-        # 此时不指定 db，以便创建尚未存在的数据库
-        conn = pymysql.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            charset='utf8mb4'
-        )
-        with conn.cursor() as cursor:
-            # 创建数据库
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{DB_NAME}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
-            cursor.execute(f"USE `{DB_NAME}`;")
-            
-            # 创建映射表
-            create_table_sql = """
-            CREATE TABLE IF NOT EXISTS `sign_assets` (
-              `id` INT(11) UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '主键ID',
-              `word_name` VARCHAR(100) NOT NULL COMMENT '手语词条名称',
-              `folder_name` VARCHAR(255) NOT NULL COMMENT '服务器上真实的文件夹全名',
-              `total_frames` INT(11) DEFAULT 0 COMMENT '动作对应的模型总帧数',
-              `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-              `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-              PRIMARY KEY (`id`),
-              UNIQUE KEY `uk_word_name` (`word_name`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-            """
-            cursor.execute(create_table_sql)
-        conn.commit()
-        conn.close()
-        print("✅ 数据库与表结构自动初始化完成！")
-    except Exception as e:
-        print(f"❌ 数据库初始化失败: {e}")
-        sys.exit(1) # 如果数据库连不上，直接终止启动
-
-def sync_glb_to_db():
-    """在应用启动时，扫描 GLB_ROOT 目录并将映射关系同步到数据库"""
-    if not os.path.exists(GLB_ROOT):
-        print(f"⚠️ GLB 根目录不存在: {GLB_ROOT}，请检查配置，跳过同步。")
-        return
-
-    print(f"🔍 开始扫描 GLB 模型目录: {GLB_ROOT} ...")
-    try:
-        conn = pymysql.connect(**DB_CONFIG)
-        with conn.cursor() as cursor:
-            # 扫描目录下所有文件夹
-            folders = [f for f in os.listdir(GLB_ROOT) if os.path.isdir(os.path.join(GLB_ROOT, f))]
-            sync_count = 0
-
-            for folder in folders:
-                try:
-                    # 提取词条名称：ACCIDENT_xxx-ACCIDENT)
-                    word_name = folder.split('-')[-1].upper()
-                    if not word_name:
-                        continue
-
-                    # 统计该文件夹下的总帧数 (.glb 文件数量)
-                    folder_path = os.path.join(GLB_ROOT, folder)
-                    total_frames = len([f for f in os.listdir(folder_path) if f.endswith('.glb')])
-
-                    # 插入或更新数据库 (利用 uk_word_name 唯一索引)
-                    # 如果词条已存在，则更新文件夹路径和总帧数
-                    sql = """
-                        INSERT INTO `sign_assets` (`word_name`, `folder_name`, `total_frames`)
-                        VALUES (%s, %s, %s)
-                        ON DUPLICATE KEY UPDATE 
-                            `folder_name` = VALUES(`folder_name`),
-                            `total_frames` = VALUES(`total_frames`);
-                    """
-                    cursor.execute(sql, (word_name, folder, total_frames))
-                    sync_count += 1
-                except Exception as e:
-                    print(f"⚠️ 解析文件夹 {folder} 时出错，已跳过: {e}")
-
-            conn.commit()
-        conn.close()
-        print(f"✅ 成功同步 {sync_count} 个手语模型映射到数据库！")
-    except Exception as e:
-        print(f"❌ 同步模型到数据库失败: {e}")
-
-# 执行数据库初始化
-init_db()
-
-# 自动扫描磁盘并同步映射数据到 MySQL
-sync_glb_to_db()
-
+ALS_JSON_PATH = config.ASL_JSON_ROOT
+ASL_VIDEO_PATH = config.ASL_300_VIDEO
+ASL_JSON_ROUTE = config.ASL_JSON_ROUTE
+ASL_VIDEO_ROUTE = config.ASL_VIDEO_ROUTE
 
 # 复用 inference_camera.py 的完整推理流水线
 # 包含：模型加载、归一化统计量、标签映射、平滑器
 pipeline = SignLanguageInferencePipeline(model_path=config.MODEL_PATH)
+
+
+def _strip_prefix(filename: str) -> str:
+    if filename.startswith("unity_gesture_stream_"):
+        return filename[len("unity_gesture_stream_"):]
+    return filename
+
+
+def _extract_resource_stem(filename: str) -> str:
+    return os.path.splitext(_strip_prefix(filename))[0]
+
+
+def _extract_word_from_stem(stem: str) -> str:
+    if "-" in stem:
+        stem = stem.split("-", 1)[1]
+    word = stem.strip().upper()
+    word = re.sub(r"\s+", " ", word)
+    word = re.sub(r"\s+\d+$", "", word)
+    return word.strip()
+
+
+def _build_asl_resource_index():
+    json_index = {}
+    video_index = {}
+
+    if os.path.isdir(ALS_JSON_PATH):
+        for filename in os.listdir(ALS_JSON_PATH):
+            if filename.lower().endswith(".jsonl"):
+                json_index[_extract_resource_stem(filename)] = filename
+
+    if os.path.isdir(ASL_VIDEO_PATH):
+        for filename in os.listdir(ASL_VIDEO_PATH):
+            if filename.lower().endswith((".mp4")):
+                video_index[_extract_resource_stem(filename)] = filename
+
+    pairs = []
+    for stem in sorted(set(json_index.keys()) & set(video_index.keys())):
+        pairs.append(
+            {
+                "stem": stem,
+                "word": _extract_word_from_stem(stem),
+                "json_filename": json_index[stem],
+                "video_filename": video_index[stem],
+            }
+        )
+    return pairs
 
 
 @app.route('/api/sign/predict', methods=['POST'])
@@ -201,42 +144,58 @@ def predict():
         })
 
     finally:
-        os.unlink(tmp_path)  # 清理临时文件
+        os.unlink(tmp_path)
 
-@app.route('/api/sign/downloads', methods=['GET'])
-def downloads():
+@app.route('/api/sign/resources', methods=['GET'])
+def get_resources():
     word = request.args.get('name')
+    if not word:
+        return jsonify({"code": 400, "msg": "Missing query parameter: name"}), 400
 
-    # 在这里转为大写，去匹配数据库
     word_query = word.strip().upper()
+    matched_pairs = []
 
-    # 从 MySQL 查文件夹名
-    conn = pymysql.connect(**DB_CONFIG, cursorclass=pymysql.cursors.DictCursor)
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT folder_name FROM sign_assets WHERE word_name = %s", (word_query,))
-        row = cursor.fetchone()
-    conn.close()
+    for item in _build_asl_resource_index():
+        if item["word"] != word_query:
+            continue
 
-    if not row:
+        json_stem = _extract_resource_stem(item["json_filename"])
+        video_stem = _extract_resource_stem(item["video_filename"])
+        if json_stem != video_stem:
+            continue
+
+        matched_pairs.append(
+            {
+                "stem": item["stem"],
+                "word": item["word"],
+                "json_url": url_for('serve_asl_json', filename=item['json_filename'], _external=True),
+                "video_url": url_for('serve_asl_video', filename=item['video_filename'], _external=True),
+            }
+        )
+
+    if not matched_pairs:
         return jsonify({"code": 404, "msg": "Resource not found"}), 404
 
-    folder = row['folder_name']
-    abs_path = os.path.join(GLB_ROOT, folder)
-    
-    # 递归/遍历所有 .glb
-    urls = []
-    for root, _, files in os.walk(abs_path):
-        for f in files:
-            if f.endswith('.glb'):
-                rel = os.path.relpath(os.path.join(root, f), GLB_ROOT)
-                urls.append(f"https://{request.host}/result_3d/glb_models/{rel}")
-    
-    urls.sort() # 确保帧顺序
-    return jsonify({"code": 200, "data": {"urls": urls}})
+    return jsonify(
+        {
+            "code": 200,
+            "data": {
+                "word": word_query,
+                "count": len(matched_pairs),
+                "items": matched_pairs,
+            },
+        }
+    )
 
-@app.route('/result_3d/glb_models/<path:filename>')
-def serve_glb(filename):
-    return send_from_directory(GLB_ROOT, filename)
+
+@app.route(f'{ASL_JSON_ROUTE}/<path:filename>')
+def serve_asl_json(filename):
+    return send_from_directory(ALS_JSON_PATH, filename)
+
+
+@app.route(f'{ASL_VIDEO_ROUTE}/<path:filename>')
+def serve_asl_video(filename):
+    return send_from_directory(ASL_VIDEO_PATH, filename)
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)

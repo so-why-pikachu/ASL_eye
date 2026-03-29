@@ -1,5 +1,6 @@
 import cv2
-import torch
+import mindspore as ms
+import mindspore.nn as nn
 import numpy as np
 import mediapipe as mp
 import os
@@ -32,9 +33,14 @@ class LandmarkSmoother:
 
 class SignLanguageInferencePipeline:
     def __init__(self, model_path, mean_path=None, std_path=None, json_path=None):
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        print(f"Using device: {self.device}")
-        
+        # 设置 MindSpore 上下文 - 优先使用 Ascend，无 Ascend 时回退到 CPU
+        try:
+            ms.set_context(mode=ms.GRAPH_MODE, device_target="Ascend")
+            print(f"Using MindSpore with device: Ascend")
+        except Exception:
+            ms.set_context(mode=ms.GRAPH_MODE, device_target="CPU")
+            print(f"Using MindSpore with device: CPU")
+
         # 初始化 MediaPipe Holistic
         self.mp_holistic = mp.solutions.holistic
         self.holistic = self.mp_holistic.Holistic(
@@ -42,38 +48,31 @@ class SignLanguageInferencePipeline:
             model_complexity=2,
             smooth_landmarks=True
         )
-        
+
         # 2. 加载全量模型数据
         self.seq_len = config.SEQ_LEN
         self.num_classes = config.NUM_CLASSES
         self.input_size = config.INPUT_SIZE #268
         self.hidden_size=config.HIDDEN_SIZE# 268
         self.num_layers=config.NUM_LAYERS
-        
+
         self.model = BiLSTMAttentionModel(
-            input_size=self.input_size, 
-            hidden_size=self.hidden_size, 
+            input_size=self.input_size,
+            hidden_size=self.hidden_size,
             num_classes=self.num_classes,
             num_layers=self.num_layers,
             dropout=0.0
-        ).to(self.device)
-        
-        # 兼容可能有 DataParallel 训练保存权重的加载
-        state_dict = torch.load(model_path, map_location=self.device)
-        new_state_dict = {}
-        for k, v in state_dict.items():
-            if k.startswith('module.'):
-                new_state_dict[k[7:]] = v
-            else:
-                new_state_dict[k] = v
-        self.model.load_state_dict(new_state_dict)
-        self.model.eval()
+        )
+
+        # 加载 MindSpore .ckpt 模型
+        ms.load_checkpoint(model_path, self.model)
+        self.model.set_train(False)
         print(f"Loaded model weights from {model_path}")
 
         # 3. 加载归一化统计量
         self.mean = None
         self.std = None
-        
+
         if mean_path is None and hasattr(config, 'MEAN_PATH'):
             mean_path = config.MEAN_PATH
         if std_path is None and hasattr(config, 'STD_PATH'):
@@ -85,12 +84,12 @@ class SignLanguageInferencePipeline:
             print(f"Loaded normalization stats from {mean_path}")
         else:
             print("🔴 WARNING: Normalization stats not found. Inference might be inaccurate if the model was trained with normalized data 🔴")
-            
+
         # 4. 加载标签映射
         self.label_map = {}
         if json_path is None and hasattr(config, 'IDX2NAME_PATH'):
             json_path = config.IDX2NAME_PATH
-                    
+
         if json_path and os.path.exists(json_path):
             try:
                 if json_path.endswith('.txt'):
@@ -99,9 +98,9 @@ class SignLanguageInferencePipeline:
                             line = line.strip()
                             if not line:
                                 continue
-                            
+
                             parts = line.split()
-                            
+
                             if len(parts) >= 2:
                                 try:
                                     lbl_id = int(parts[0])
@@ -124,7 +123,7 @@ class SignLanguageInferencePipeline:
                     print(f"Loaded label map from {json_path}")
             except Exception as e:
                 print(f"🔴 WARNING:Failed to load label map: {e}")
-        
+
         self.smoother = LandmarkSmoother(alpha=config.ALPHA)
         
     def extract_features(self, frame):
@@ -184,18 +183,17 @@ class SignLanguageInferencePipeline:
         processed_data = self.preprocess_sequence(raw_seq)
         if processed_data is None:
             return "Too Short", 0.0
-        
-        # 转 tensor
-        tensor_data = torch.from_numpy(processed_data).unsqueeze(0).float().to(self.device)  # [1, 64, 268]
-        
-        with torch.no_grad():
-            out = self.model(tensor_data)
-            probs = torch.softmax(out, dim=1)
-            conf, pred_class = torch.max(probs, dim=1)
-            
-            conf = conf.item()
-            pred_class = pred_class.item()
-        
+
+        # 转 MindSpore Tensor
+        tensor_data = ms.Tensor(processed_data, dtype=ms.float32).expand_dims(0)  # [1, 64, 268]
+
+        out = self.model(tensor_data)
+        probs = nn.Softmax(axis=1)(out)
+        conf, pred_class = ms.ops.max(probs, axis=1)
+
+        conf = float(conf.asnumpy())
+        pred_class = int(pred_class.asnumpy())
+
         # 获取文本标签
         label_text = self.label_map.get(pred_class, f"Class {pred_class}")
         return label_text, conf
