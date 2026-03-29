@@ -85,14 +85,11 @@ npm install  # 或使用 yarn install
 启动后端服务
 进入 backend 目录，运行主程序。配置文件 config.py 中均为相对路径，可根据你的本地目录结构按需修改和放置：
 
-code
-Bash
-download
-content_copy
-expand_less
+
+```Bash
 cd backend
 python app.py
-
+```
 启动前端服务
 进入 frontend 目录，启动开发服务器，或打包后运行：
 
@@ -119,8 +116,6 @@ Unity WebGL 构建源码（用于 3D 模型展示交互）
 ![alt text](./image/preview/translate.png)
 	
 ![alt text](./image/preview/learning.png)
-
-(提示：建议将上方图片存放在项目根目录的 assets 文件夹中，并使用相对路径，以确保在 GitHub/Gitee 上能正常显示)
 
 ⌨️ 快捷键指南 (3D 模型交互)
 动作	快捷键	描述
