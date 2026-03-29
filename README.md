@@ -118,7 +118,7 @@ Unity WebGL 构建源码（用于 3D 模型展示交互）
 
 ![alt text](./image/preview/translate.png)
 	
-![alt text](./image/preview/learning-preview.png)
+![alt text](./image/preview/learning.png)
 
 (提示：建议将上方图片存放在项目根目录的 assets 文件夹中，并使用相对路径，以确保在 GitHub/Gitee 上能正常显示)
 
